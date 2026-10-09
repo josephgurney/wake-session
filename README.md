@@ -6,7 +6,7 @@ A browser wakeboarding sim in the spirit of EA Skate. You ride a 65 ft line behi
 
 ## Run it
 
-Open `index.html` in any desktop browser. Everything is self-contained apart from three CDN loads: three.js r128 (cdnjs), its glTF loader (jsDelivr) and the Barlow Condensed / DM Sans fonts (Google Fonts). The rider model ships as `assets/rider.js`, so opening the file straight from disk works. A local server works too:
+Open `index.html` in any desktop browser. Everything is self-contained apart from three CDN loads: three.js r128 (cdnjs), its glTF loader (jsDelivr) and the Barlow Condensed / DM Sans fonts (Google Fonts). The music streams from SoundCloud through its widget (see below); without a connection the game still runs, just without the tunes. The rider model ships as `assets/rider.js`, so opening the file straight from disk works. A local server works too:
 
 ```bash
 python3 -m http.server 8000
@@ -14,7 +14,7 @@ python3 -m http.server 8000
 
 then visit http://localhost:8000/.
 
-Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landscape works best.
+Keyboard, gamepad or touch. Sound and music start on the first input. On a phone, landscape works best.
 
 ## Controls
 
@@ -29,9 +29,10 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 | `V` | cycle cameras: follow, long lens, boat tower | |
 | `P` | cycle quality: high, medium, low, auto | |
 | `R` | reset behind the boat | |
-| `M` | mute | |
+| `M` | mute (music too) | |
+| `N` `B` / d-pad ▶ ◀ | next / previous tune from the boat | |
 
-**Touch:** drag anywhere on the left half for a floating stick (left/right to edge, and off the lip to spin; up/down in the air for front roll / backroll). Right side: hold **Pop** to load and release at the lip, hold a grab button while airborne, hold **Tantrum** or **Front flip** to rotate, tap **Cam** or **Reset**.
+**Touch:** drag anywhere on the left half for a floating stick (left/right to edge, and off the lip to spin; up/down in the air for front roll / backroll). Right side: hold **Pop** to load and release at the lip, hold a grab button while airborne, hold **Tantrum** or **Front flip** to rotate, tap **Cam** or **Reset**. The DJ panel under the score plays, pauses and skips the music.
 
 ## How it works
 
@@ -45,6 +46,7 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 - **Rotation** is set at takeoff, the way a rider winds up against the line and lets it go at the lip. In the first 0.45 s off the lip, holding a direction charges angular momentum for up to a quarter second, and a bigger pop gives you more to work with. After that you can't add or take away spin, only change how fast it turns: keep pushing the same way to tuck (knees up, handle in), which turns faster, or push back to open up, which slows it. A tap is a 180; a full wind-up opened up is a 360, tucked a 540 (do neither off a big pop and it's too much for a 360). Inverts work the same way. The body turns about its centre of mass, not its feet, so in a backroll the board goes over the top. In the last 0.3 s the body is nudged at most 25° toward the nearest clean landing.
 - **Landing** is judged on what the board meets: speed into the surface measured against the wake's own slope (so landing on the second wake's downslope is soft, while casing it or sailing past into the flats is not), and how far the board is from straight. More than 45° out on a spin catches an edge, and which one depends on which way you're sliding: catch the toe edge and you go over face-first, catch the heel edge and you slam onto your back. More than 60° out on an invert is a fall, and an invert that comes round short or long puts the head or back in before the board. Heavy landings cost points and scrub speed.
 - **Bails** hand the rider to a ragdoll that carries their speed and spin into the water, so no two falls are the same. It's a home-made position-based solver: particles at the joints held by bone lengths and joint limits (knees, elbows, ankles, a spine that bends and twists), with the board and boots one rigid piece. The water holds up each part by its volume and drags on it. The hips and legs sink and the vest floats the chest. The board skims along its length but digs in on an edge or slaps down flat, and that's what throws the body over it when an edge catches. Spray bursts where each part hits and streams off it while it skids. The handle is let go; overload the line and it yanks the arms toward the boat first. After about a second the rider comes round, lifts their head and sits back in the water to wait for the boat.
+- **Music**: DJ Paulie P drives the boat and plays his SoundCloud through the tower speakers: three of his mixes (UKG Vol. 2, UKG Vol. 5, Hard Techno Vol. 3), then the rest of his profile. The SoundCloud widget runs as a hidden iframe, like the head unit under the dash, and the DJ panel is its remote: track title, artwork, a progress bar, play/pause, previous and next, with the title linking back to the track on SoundCloud. It starts with the session, gets a little quieter the further the camera is from the boat, dips the engine drone while it plays, and goes round to the first tune again after the last. The speakers' LED rings glow and the crew nod along while the set plays. Some browsers (mostly Safari on iPhone) won't start a hidden player; if nothing is playing a few seconds after asking, the real SoundCloud player slides out under the panel for one tap and tucks away again once the music starts. If SoundCloud can't be reached, the panel says so and links to the page instead.
 - **Scoring** names tricks properly (Mobe, Scarecrow, Whirlybird, Backroll to Blind, wake-to-wake bonuses) and multiplies for clean landings.
 - **Performance** scales automatically: water mesh density, render resolution, shader detail, reflection resolution, bloom, shadow map size and tree density step down when frames run long and back up with headroom. Low quality drops the reflection pass and uses the analytic sky instead.
 
@@ -68,6 +70,8 @@ pip install playwright matplotlib numpy && playwright install chromium
 python tools/jump_bench.py        # table in the terminal, plot in tools/out/jump_bench.png
 ```
 
+
+The music is `DJ_SETS` in `index.html`: a list of SoundCloud links, each a track, a set or a whole profile. Next steps through the tracks inside one, then moves on to the next link; a link that won't load is skipped. Use full `soundcloud.com/...` addresses; `on.soundcloud.com` share links don't always resolve inside the widget (open one in a browser and copy the address it lands on). `DJ_VOL` sets how loud it plays with the camera on the boat.
 
 The physics constants sit at the top of the script in `index.html`: boat speed, rope length, edge grip and cap, drag, pop strength, and `ROT` (how fast each rotation turns open and tucked, and the most a takeoff can wind up). The ragdoll is tuned by the `RAG_` constants in its own section: each body part's mass, size, volume and drag, the board's drag along, across and through it, and how soon the rider comes round. The wake shape is the `wake()` function, written once in GLSL and once in JavaScript; keep the two in step.
 
