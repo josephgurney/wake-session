@@ -69,7 +69,7 @@ body{padding:0}
 body.started #bug{opacity:1}
 @media (max-width:560px){#bug{top:calc(14px + env(safe-area-inset-top,0px) + 108px);height:36px}}
 #gp{position:absolute;right:16px;bottom:calc(14px + env(safe-area-inset-bottom,0px));font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);display:none}
-/* left column: score, then DJ Paulie P's deck (the remote for the boat's sound system) */
+/* left column: score, then DJ Poorly P's deck (the remote for the boat's sound system) */
 .stack{position:absolute;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 .stack .panel{position:relative}
 #dj{width:250px;box-sizing:border-box;pointer-events:auto;padding:8px 10px 9px}
@@ -98,7 +98,26 @@ body.started #bug{opacity:1}
 #dj .i-pause{display:none}
 #dj.playing .i-play{display:none}
 #dj.playing .i-pause{display:block}
-#dj .key{margin-left:auto;font-size:11px;color:var(--ink-dim);white-space:nowrap}
+#dj #dj-set{margin-left:auto}
+#dj #dj-set svg{fill:none}
+/* settings: a modal over the paused ride */
+#settings{width:min(420px,calc(100% - 32px));box-sizing:border-box;padding:0;color:var(--ink);background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);font-family:var(--body);max-height:calc(100% - 24px);overflow:auto}
+#settings::backdrop{background:rgba(17,14,42,.55)}
+#settings form{padding:20px 22px 22px}
+#settings .head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+#settings h2{font-family:var(--display);font-weight:800;font-size:34px;line-height:1;margin:0;text-transform:uppercase;letter-spacing:.02em}
+#settings h3{font-family:var(--body);font-weight:500;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-dim);margin:18px 0 4px}
+#settings .vol{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) 3ch;align-items:center;gap:6px 14px;padding:9px 0;border-top:1px solid rgba(255,255,255,.08)}
+#settings .vol span{font-size:14px}
+#settings .vol small{display:block;font-size:11px;color:var(--ink-dim);margin-top:2px}
+#settings input[type=range]{width:100%;margin:0;accent-color:var(--accent);height:28px;cursor:pointer}
+#settings output{font-family:var(--display);font-weight:700;font-size:18px;text-align:right;font-variant-numeric:tabular-nums}
+#settings .mute{display:flex;align-items:center;gap:10px;padding:11px 0 2px;border-top:1px solid rgba(255,255,255,.08);font-size:14px;cursor:pointer}
+#settings .mute input{width:18px;height:18px;margin:0;accent-color:var(--accent);cursor:pointer}
+#settings kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase}
+#settings .done{margin-top:18px;width:100%;font-family:var(--display);font-weight:800;font-size:20px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent);color:var(--navy);border:0;border-radius:6px;padding:11px 20px;cursor:pointer}
+#settings input:focus-visible,#settings .done:focus-visible{outline:2px solid #fff;outline-offset:2px}
+body.touch #settings .kbd-only{display:none}
 #dj.flash{animation:djflash .9s ease-out}
 @keyframes djflash{0%{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}100%{border-color:var(--glass-edge);box-shadow:0 0 0 0 transparent}}
 /* the SoundCloud widget itself stays out of sight unless the browser insists on a tap inside it to start */
@@ -111,7 +130,6 @@ body.started #bug{opacity:1}
 #touch[hidden]{display:none}
 body:not(.started) #touch{display:none}
 body.touch #controls{display:none}
-body.touch #dj .key{display:none}
 body.touch .card .grid.kb{display:none}
 .card .grid.tc{display:none}
 body.touch .card .grid.tc{display:grid}
@@ -158,20 +176,20 @@ body.touch .card .grid.tc{display:grid}
       <div class="small" id="falls">Falls: 0</div>
     </div>
     <div class="panel" id="dj" role="region" aria-label="Music from the boat">
-      <div class="label"><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span><span>On the boat · DJ Paulie P</span></div>
+      <div class="label"><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span><span>On the boat · DJ Poorly P</span></div>
       <div class="row">
         <div class="art" id="dj-art" aria-hidden="true"></div>
-        <div class="meta"><div class="title" id="dj-title" aria-live="polite">Starts when you take the handle</div><div class="by" id="dj-by">Paulie's SoundCloud</div></div>
+        <div class="meta"><div class="title" id="dj-title" aria-live="polite">Starts when you take the handle</div><div class="by" id="dj-by">Poorly P's SoundCloud</div></div>
       </div>
       <div class="bar" aria-hidden="true"><i id="dj-bar"></i></div>
       <div class="ctl">
         <button type="button" id="dj-prev" aria-label="Previous tune"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3h2v10H3zM14 3v10L6 8z"/></svg></button>
         <button type="button" id="dj-play" aria-label="Play"><svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11L13.5 8z"/></svg><svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h3v10H4zM9 3h3v10H9z"/></svg></button>
         <button type="button" id="dj-next" aria-label="Next tune"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11 3h2v10h-2zM2 3v10l8-5z"/></svg></button>
-        <span class="key"><kbd>N</kbd> next tune</span>
+        <button type="button" id="dj-set" aria-label="Settings: music, boat and effects volume" aria-haspopup="dialog"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h6.5M13 4.5h1M2 11.5h1.5M8 11.5h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="10.6" cy="4.5" r="2" stroke="currentColor" stroke-width="1.6"/><circle cx="5.6" cy="11.5" r="2" stroke="currentColor" stroke-width="1.6"/></svg></button>
       </div>
     </div>
-    <iframe id="sc" title="DJ Paulie P on SoundCloud" allow="autoplay; encrypted-media"></iframe>
+    <iframe id="sc" title="DJ Poorly P on SoundCloud" allow="autoplay; encrypted-media"></iframe>
   </div>
   <div class="panel tr">
     <div class="big"><span id="speed">0</span><span>mph</span></div>
@@ -189,7 +207,8 @@ body.touch .card .grid.tc{display:grid}
     <span><kbd>A</kbd><kbd>D</kbd><kbd>W</kbd><kbd>S</kbd> grabs</span>
     <span><kbd>V</kbd> camera</span>
     <span><kbd>N</kbd><kbd>B</kbd> next · previous tune</span>
-    <span><kbd>M</kbd> sound</span>
+    <span><kbd>M</kbd> mute</span>
+    <span><kbd>Esc</kbd> settings</span>
     <span><kbd>P</kbd> quality</span>
   </div>
   <img id="bug" src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349">
@@ -201,7 +220,7 @@ body.touch .card .grid.tc{display:grid}
       <h1>Thursday <em>Yacht Club</em></h1>
       <div class="tagline">No Risk, No Story.</div>
       <p>The boat's doing 21 mph on a 65 ft line. Cut out wide, then edge hard back at the wake. Hold <kbd>Space</kbd> on the way in to load the line, and let go at the lip to pop. Clear both wakes for the bonus. Spins are set at the lip: tap a direction for a 180, hold it to wind up more. Keep pushing to tuck and spin faster, push back to open up and slow it. Land straight, or catch an edge and drink half the lake.</p>
-      <p>DJ Paulie P is driving, and his SoundCloud is playing through the tower speakers. Skip a tune with <kbd>N</kbd> or the DJ panel.</p>
+      <p>DJ Poorly P is driving, and his SoundCloud is playing through the tower speakers. Skip a tune with <kbd>N</kbd> or the DJ panel.</p>
       <div class="grid kb">
         <div><span><kbd>←</kbd> <kbd>→</kbd></span><span>heelside / toeside edge · spin off the lip (tap for 180, hold to wind up more)</span></div>
         <div><span>keep pushing /<br>push back</span><span>tuck to turn faster / open up to slow it</span></div>
@@ -212,6 +231,7 @@ body.touch .card .grid.tc{display:grid}
         <div><span><kbd>W</kbd> <kbd>S</kbd></span><span>nose / tail grab</span></div>
         <div><span><kbd>V</kbd> <kbd>R</kbd> <kbd>P</kbd></span><span>camera · reset · quality</span></div>
         <div><span><kbd>N</kbd> <kbd>B</kbd> <kbd>M</kbd></span><span>next · previous tune · mute</span></div>
+        <div><span><kbd>Esc</kbd></span><span>settings: music, boat and effects volume</span></div>
         <div><span>Gamepad</span><span>left stick edge · right stick pull down then flick · bumpers grab · d-pad skips tunes</span></div>
       </div>
       <div class="grid tc">
@@ -221,13 +241,25 @@ body.touch .card .grid.tc{display:grid}
         <div><span><kbd>Grabs</kbd></span><span>hold any grab button while airborne</span></div>
         <div><span><kbd>Tantrum</kbd> <kbd>Front flip</kbd></span><span>hold in the air to rotate</span></div>
         <div><span><kbd>Cam</kbd> <kbd>Reset</kbd></span><span>tap to switch view or get back behind the boat</span></div>
-        <div><span><kbd>DJ panel</kbd></span><span>top left: play, pause or skip Paulie's tunes</span></div>
+        <div><span><kbd>DJ panel</kbd></span><span>top left: play, pause or skip Poorly P's tunes, and the sliders button for volume</span></div>
       </div>
       <button id="go" type="button">Take the handle</button>
       <div class="note label">Keyboard, gamepad or touch · sound and music start on first input</div>
     </div>
   </div>
 </div>
+
+<dialog id="settings" aria-labelledby="set-title">
+  <form method="dialog">
+    <div class="head"><h2 id="set-title">Settings</h2><span class="label">Ride paused</span></div>
+    <h3>Sound</h3>
+    <label class="vol"><span>Music<small>DJ Poorly P</small></span><input type="range" id="vol-music" min="0" max="100" step="1"><output for="vol-music"></output></label>
+    <label class="vol"><span>Boat<small>engine</small></span><input type="range" id="vol-engine" min="0" max="100" step="1"><output for="vol-engine"></output></label>
+    <label class="vol"><span>Sound effects<small>spray, wind, splashes</small></span><input type="range" id="vol-fx" min="0" max="100" step="1"><output for="vol-fx"></output></label>
+    <label class="mute"><input type="checkbox" id="vol-mute"><span>Mute everything <kbd class="kbd-only">M</kbd></span></label>
+    <button class="done" value="done">Back to the water</button>
+  </form>
+</dialog>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -761,7 +793,7 @@ function transomName(hull,text){
   const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2)); g.setIndex(idx); g.computeVertexNormals();
   return new THREE.Mesh(g,new THREE.MeshStandardMaterial({map:t,transparent:true,depthWrite:false,roughness:0.2,metalness:0}));
 }
-// LED rings on the tower speakers: glow while Paulie's set is playing (HDR, so the bloom picks them up)
+// LED rings on the tower speakers: glow while Poorly P's set is playing (HDR, so the bloom picks them up)
 const djLed=new THREE.MeshBasicMaterial({color:0x000000});
 const boat=new THREE.Group();
 {
@@ -801,14 +833,14 @@ const boat=new THREE.Group();
     const ring=new THREE.Mesh(new THREE.TorusGeometry(0.116,0.011,6,28),djLed); ring.position.set(sx*0.33,2.1,-0.594); boat.add(ring);
     const clampM=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.1,0.07),dark); clampM.position.set(sx*0.33,2.27,-0.4); boat.add(clampM);
   }
-  // driver (DJ Paulie P, headphones on) + spotter; heads sit on a neck pivot so they can nod along
+  // driver (DJ Poorly P, headphones on) + spotter; heads sit on a neck pivot so they can nod along
   function person(color,x,z,faceBack){const g=new THREE.Group();const body=new THREE.Mesh(new THREE.CylinderGeometry(0.17,0.2,0.55,10),mat(color,{roughness:0.8}));body.position.y=0.3;g.add(body);const hg=new THREE.Group();hg.position.y=0.6;g.add(hg);const head=new THREE.Mesh(new THREE.SphereGeometry(0.11,10,8),mat(0xd9a37e,{roughness:0.6}));head.position.y=0.12;hg.add(head);const cap=new THREE.Mesh(new THREE.SphereGeometry(0.115,10,8,0,Math.PI*2,0,Math.PI/2),mat(0x1d1d1d));cap.position.y=0.13;hg.add(cap);g.userData.head=hg;g.position.set(x,0.55,z);if(faceBack)g.rotation.y=Math.PI;return g;}
-  const paulie=person(0x2f6fb0,0.62,0.75,false), spotter=person(0xf2c14e,-0.6,-0.4,true);
-  { const hp=mat(0x111214,{roughness:0.45}), h=paulie.userData.head;
+  const poorly=person(0x2f6fb0,0.62,0.75,false), spotter=person(0xf2c14e,-0.6,-0.4,true);
+  { const hp=mat(0x111214,{roughness:0.45}), h=poorly.userData.head;
     const band=new THREE.Mesh(new THREE.TorusGeometry(0.128,0.013,6,18,Math.PI),hp); band.position.y=0.13; h.add(band);
     for(const sx of [-1,1]){ const cup=new THREE.Mesh(new THREE.CylinderGeometry(0.052,0.052,0.04,14),hp); cup.rotation.z=Math.PI/2; cup.position.set(sx*0.122,0.11,0); h.add(cup); } }
-  boat.add(paulie); boat.add(spotter); boat.userData.heads=[paulie.userData.head,spotter.userData.head];
-  const name=transomName(hull,'DJ PAULIE P'); boat.add(name);
+  boat.add(poorly); boat.add(spotter); boat.userData.heads=[poorly.userData.head,spotter.userData.head];
+  const name=transomName(hull,'DJ POORLY P'); boat.add(name);
   boat.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; } });
   ws.castShadow=false; name.castShadow=false;
 }
@@ -1603,7 +1635,7 @@ function updateEffects(dt){
 function updateBoatVisual(){
   boat.position.set(0,0.02+0.03*Math.sin(simTime*2.1),boatZ);
   boat.rotation.set(-2.5*DEG+0.4*DEG*Math.sin(simTime*1.7),0,1.2*DEG*Math.sin(simTime*1.3));
-  // the crew nod along while Paulie's set is playing
+  // the crew nod along while Poorly P's set is playing
   const [hp,hs]=boat.userData.heads, nod=ph=>Math.pow(Math.abs(Math.sin(simTime*Math.PI*2+ph)),3);
   hp.rotation.x=0.16*dj.glow*nod(0); hs.rotation.x=0.1*dj.glow*nod(0.7);
 }
@@ -1644,18 +1676,33 @@ function updateCamera(dt,snap){
 }
 
 // ---------- audio ----------
-let AC=null,master,engineGain,engineOsc,sprayGain,windGain,washGain;
+// Mix: engine -> engineBus, spray/wash/wind/splashes -> fxBus, both -> master (M mutes it) -> a limiter, so
+// turning everything up in Settings can't clip. The music is the SoundCloud widget's own volume (djVolume).
+let AC=null,master,engineBus,fxBus,engineGain,engineOsc,sprayGain,windGain,washGain;
+// Settings volumes are 0-100. 75 is the game's original mix; the taper is squared so the slider feels even to the
+// ear: 100 is about 5 dB louder, 50 about 7 dB quieter, 0 silent.
+const SOUND_KEY='tyc-sound', SOUND_DEF={music:75,engine:75,fx:75};
+const sound=Object.assign({},SOUND_DEF);
+try{ const saved=JSON.parse(localStorage.getItem(SOUND_KEY)||'{}'); for(const k in SOUND_DEF){ const v=Number(saved[k]); if(saved[k]!=null && Number.isFinite(v))sound[k]=clamp(Math.round(v),0,100); } }catch(_){}
+const soundLevel=v=>Math.pow(v/75,2);
+function applySound(){
+  if(AC){ engineBus.gain.value=soundLevel(sound.engine); fxBus.gain.value=soundLevel(sound.fx); master.gain.value=muted?0:0.9; }
+  dj.vol=-1;   // push the music volume on the next frame
+}
+function setMuted(v){ muted=v; applySound(); const c=document.getElementById('vol-mute'); if(c)c.checked=v; }
 function initAudio(){
   if(AC)return; try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){return;}
-  master=AC.createGain(); master.gain.value=muted?0:0.9; master.connect(AC.destination);
+  const lim=AC.createDynamicsCompressor(); lim.threshold.value=-3; lim.knee.value=3; lim.ratio.value=20; lim.attack.value=0.003; lim.release.value=0.25; lim.connect(AC.destination);
+  master=AC.createGain(); master.connect(lim);
+  engineBus=AC.createGain(); engineBus.connect(master); fxBus=AC.createGain(); fxBus.connect(master); applySound();
   const o1=AC.createOscillator(); o1.type='sawtooth'; o1.frequency.value=58; const o2=AC.createOscillator(); o2.type='square'; o2.frequency.value=116.5;
   const lp=AC.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=420; lp.Q.value=1.4;
-  engineGain=AC.createGain(); engineGain.gain.value=0.05; o1.connect(lp); o2.connect(lp); lp.connect(engineGain); engineGain.connect(master); o1.start(); o2.start(); engineOsc=[o1,o2];
+  engineGain=AC.createGain(); engineGain.gain.value=0.05; o1.connect(lp); o2.connect(lp); lp.connect(engineGain); engineGain.connect(engineBus); o1.start(); o2.start(); engineOsc=[o1,o2];
   const buf=AC.createBuffer(1,AC.sampleRate*2,AC.sampleRate); const d=buf.getChannelData(0); for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
-  const mk=(type,freq,q,g)=>{const s=AC.createBufferSource();s.buffer=buf;s.loop=true;const f=AC.createBiquadFilter();f.type=type;f.frequency.value=freq;f.Q.value=q;const gn=AC.createGain();gn.gain.value=g;s.connect(f);f.connect(gn);gn.connect(master);s.start();return gn;};
+  const mk=(type,freq,q,g)=>{const s=AC.createBufferSource();s.buffer=buf;s.loop=true;const f=AC.createBiquadFilter();f.type=type;f.frequency.value=freq;f.Q.value=q;const gn=AC.createGain();gn.gain.value=g;s.connect(f);f.connect(gn);gn.connect(fxBus);s.start();return gn;};
   sprayGain=mk('bandpass',1700,0.5,0); washGain=mk('lowpass',520,0.7,0.05); windGain=mk('highpass',2600,0.4,0);
 }
-function playSplash(vol){ if(!AC)return; const buf=AC.createBuffer(1,AC.sampleRate*0.7,AC.sampleRate); const d=buf.getChannelData(0); for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/d.length,1.6); const s=AC.createBufferSource(); s.buffer=buf; const f=AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value=900; const g=AC.createGain(); g.gain.value=0.7*vol; s.connect(f); f.connect(g); g.connect(master); s.start(); }
+function playSplash(vol){ if(!AC)return; const buf=AC.createBuffer(1,AC.sampleRate*0.7,AC.sampleRate); const d=buf.getChannelData(0); for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/d.length,1.6); const s=AC.createBufferSource(); s.buffer=buf; const f=AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value=900; const g=AC.createGain(); g.gain.value=0.7*vol; s.connect(f); f.connect(g); g.connect(fxBus); s.start(); }
 function updateAudio(dt){
   if(!AC)return;
   const sp=Math.hypot(R.vel.x,R.vel.z), edge=Math.abs(R.steer);
@@ -1668,12 +1715,12 @@ function updateAudio(dt){
   washGain.gain.value=damp(washGain.gain.value,R.state==='riding'?0.06:0.02,4,dt);
 }
 
-// ---------- DJ Paulie P: music from the boat ----------
-// Paulie drives the boat and plays his SoundCloud through the tower speakers. The SoundCloud widget is a hidden
+// ---------- DJ Poorly P: music from the boat ----------
+// Poorly P drives the boat and plays his SoundCloud through the tower speakers. The SoundCloud widget is a hidden
 // iframe, like the head unit under the dash, and the DJ panel is its remote. Each entry in DJ_SETS can be a track,
 // a set or a whole profile: next steps through the tracks inside one, then moves on to the next entry.
 // Use full soundcloud.com addresses: on.soundcloud.com share links don't always resolve inside the widget.
-// Paulie's picks first, then the rest of his profile.
+// Poorly P's picks first, then the rest of his profile.
 const DJ_SETS=[
   'https://soundcloud.com/paul-prouse/ukg-vol2',
   'https://soundcloud.com/paul-prouse/ukg-vol-5',
@@ -1689,7 +1736,7 @@ function djStatus(title,by,href){
   if(href){ const a=document.createElement('a'); a.href=href; a.target='_blank'; a.rel='noopener'; a.textContent=by; djEl.by.append(a); } else djEl.by.textContent=by||'';
 }
 function djPanel(){ djEl.panel.classList.toggle('playing',dj.playing); djEl.play.setAttribute('aria-label',dj.playing?'Pause':'Play'); }
-function djFail(msg){ dj.failed=true; dj.ready=false; dj.playing=false; dj.blockAt=0; djPanel(); const u=DJ_SETS[dj.set], home=/^https:\/\/soundcloud\.com\/[^/?#]+/.exec(u); djStatus(msg,"Open Paulie's SoundCloud ↗",home?home[0]:u); }
+function djFail(msg){ dj.failed=true; dj.ready=false; dj.playing=false; dj.blockAt=0; djPanel(); const u=DJ_SETS[dj.set], home=/^https:\/\/soundcloud\.com\/[^/?#]+/.exec(u); djStatus(msg,"Open Poorly P's SoundCloud ↗",home?home[0]:u); }
 function djBoot(){
   const s=document.createElement('script'); s.src='https://w.soundcloud.com/player/api.js'; s.async=true;
   s.onload=()=>{ if(!window.SC||!SC.Widget){ djFail("Couldn't reach SoundCloud"); return; }
@@ -1705,20 +1752,20 @@ function djBind(){
   w.bind(E.PAUSE,()=>{ dj.playing=false; djPanel(); });
   w.bind(E.PLAY_PROGRESS,e=>{ dj.pos=e.currentPosition||0; dj.prog=e.relativePosition||0; });
   // A playlist usually moves on by itself. If nothing has started a moment after a tune ends (the end of the list,
-  // or a widget that doesn't advance), Paulie puts the next one on: round to the top again, or on to the next set.
+  // or a widget that doesn't advance), Poorly P puts the next one on: round to the top again, or on to the next set.
   w.bind(E.FINISH,()=>{ dj.playing=false; djPanel(); setTimeout(()=>{ if(dj.want && !dj.playing)djNext(); },2500); });
   // a tune or link that won't play is skipped; only give up once every entry has had a go
-  w.bind(E.ERROR,()=>{ if(++dj.errs>DJ_SETS.length+dj.n){ djFail("Couldn't play Paulie's tunes"); return; }
-    if(dj.ready){ if(dj.want)djNext(); } else if(DJ_SETS.length>1)djLoadSet(dj.set+1); else djFail("Couldn't find Paulie's tunes"); });
+  w.bind(E.ERROR,()=>{ if(++dj.errs>DJ_SETS.length+dj.n){ djFail("Couldn't play Poorly P's tunes"); return; }
+    if(dj.ready){ if(dj.want)djNext(); } else if(DJ_SETS.length>1)djLoadSet(dj.set+1); else djFail("Couldn't find Poorly P's tunes"); });
 }
 function djReady(){
   if(dj.readyGen===dj.gen)return;   // the load callback and the READY event both report in; take the first
   dj.readyGen=dj.gen; clearTimeout(dj.bootT);
   dj.w.getSounds(list=>{
     dj.n=(list||[]).length;
-    if(!dj.n){ if(DJ_SETS.length>1 && ++dj.errs<=DJ_SETS.length)djLoadSet(dj.set+1); else djFail("Couldn't find Paulie's tunes"); return; }
+    if(!dj.n){ if(DJ_SETS.length>1 && ++dj.errs<=DJ_SETS.length)djLoadSet(dj.set+1); else djFail("Couldn't find Poorly P's tunes"); return; }
     dj.ready=true; dj.failed=false; dj.vol=-1;
-    if(dj.want)djPlay(); else djStatus('Starts when you take the handle',DJ_SETS.length>1?"Paulie's mixes on SoundCloud":`${dj.n} tune${dj.n>1?'s':''} on SoundCloud`);
+    if(dj.want)djPlay(); else djStatus('Starts when you take the handle',DJ_SETS.length>1?"Poorly P's mixes on SoundCloud":`${dj.n} tune${dj.n>1?'s':''} on SoundCloud`);
   });
 }
 function djNowPlaying(){
@@ -1726,7 +1773,7 @@ function djNowPlaying(){
   dj.w.getCurrentSoundIndex(i=>{ dj.idx=i||0; });
   dj.w.getCurrentSound(s=>{
     if(!s)return;
-    const by=(s.user&&s.user.username)||'DJ Paulie P';
+    const by=(s.user&&s.user.username)||'DJ Poorly P';
     djStatus(s.title||'Untitled',`${by} on SoundCloud ↗`,s.permalink_url);
     const art=(s.artwork_url||(s.user&&s.user.avatar_url)||'').replace('-large.','-t200x200.');
     djEl.art.style.backgroundImage=/^https:\/\/[^"'()\s]+$/.test(art)?`url("${art}")`:'';
@@ -1736,20 +1783,20 @@ function djNowPlaying(){
 function djVolume(){
   // louder on the boat than 20 m down the line; M mutes the music with everything else
   const d=camera.position.distanceTo(boat.position);
-  const v=muted?0:Math.round(DJ_VOL*(0.6+0.4*10/(10+d)));
+  const v=muted?0:Math.min(100,Math.round(DJ_VOL*(0.6+0.4*10/(10+d))*soundLevel(sound.music)));
   if(v!==dj.vol && (Math.abs(v-dj.vol)>=2 || v===0)){ dj.vol=v; dj.w.setVolume(v); }
 }
 function djPlay(){
   dj.want=true;
-  if(!dj.ready){ if(!dj.failed)djStatus('Tuning in…','Paulie is picking a tune'); return; }
-  if(!dj.playing && !djEl.frame.classList.contains('show'))djStatus('Tuning in…','Paulie is picking a tune');
+  if(!dj.ready){ if(!dj.failed)djStatus('Tuning in…','Poorly P is picking a tune'); return; }
+  if(!dj.playing && !djEl.frame.classList.contains('show'))djStatus('Tuning in…','Poorly P is picking a tune');
   djVolume(); dj.w.play(); dj.blockAt=performance.now()+4000;
 }
 function djPause(){ dj.want=false; dj.blockAt=0; if(dj.ready)dj.w.pause(); }
 function djToggle(){ if(dj.playing||(dj.want&&dj.blockAt))djPause(); else djPlay(); }
 function djLoadSet(i){
   dj.set=(i+DJ_SETS.length)%DJ_SETS.length; dj.gen++; dj.ready=false; dj.idx=0; dj.pos=0; dj.prog=0;
-  djStatus('Tuning in…','Paulie is changing records');   // djReady sets the volume and then plays
+  djStatus('Tuning in…','Poorly P is changing records');   // djReady sets the volume and then plays
   dj.w.load(DJ_SETS[dj.set],{auto_play:false,visual:false,show_comments:false,show_reposts:false,show_teaser:false,hide_related:true,buying:false,sharing:false,download:false,color:'#ffed00',callback:djReady});
 }
 function djSkip(i){ dj.idx=i; dj.pos=0; dj.prog=0; dj.want=true; dj.w.skip(i); djVolume(); dj.w.play(); dj.blockAt=performance.now()+4000; }
@@ -1781,6 +1828,32 @@ function djUpdate(dt){
 for(const [id,fn] of [['dj-play',djToggle],['dj-next',djNext],['dj-prev',djPrev]])
   document.getElementById(id).addEventListener('click',e=>{ fn(); if(e.detail)canvas.focus(); });
 
+// ---------- settings: sound volumes, over a paused ride ----------
+const settingsEl=document.getElementById('settings');
+let paused=false, fxPreviewT=0;
+for(const k of Object.keys(SOUND_DEF)){
+  const input=document.getElementById('vol-'+k), out=settingsEl.querySelector(`output[for="vol-${k}"]`);
+  input.value=sound[k]; out.textContent=sound[k];
+  input.addEventListener('input',()=>{
+    sound[k]=Number(input.value); out.textContent=input.value; applySound();
+    // the effects have nothing playing while the ride is paused, so a splash lets you hear the new level
+    if(k==='fx' && performance.now()-fxPreviewT>250){ fxPreviewT=performance.now(); playSplash(0.6); }
+  });
+  input.addEventListener('change',()=>{ try{ localStorage.setItem(SOUND_KEY,JSON.stringify(sound)); }catch(_){} });
+}
+document.getElementById('vol-mute').addEventListener('change',e=>setMuted(e.target.checked));
+function openSettings(){
+  if(settingsEl.open)return;
+  // let go of everything held, so nothing pops or grabs when the ride starts again
+  for(const k in keys)keys[k]=false; for(const k in R.grabHeld)R.grabHeld[k]=false; R.loading=false; R.popRequest=false;
+  touch.steer=touch.flip=touch.roll=0; for(const k in touch.grab)touch.grab[k]=false;
+  document.getElementById('vol-mute').checked=muted;
+  paused=true; settingsEl.showModal();
+}
+settingsEl.addEventListener('close',()=>{ paused=false; canvas.focus(); });
+settingsEl.addEventListener('click',e=>{ if(e.target===settingsEl)settingsEl.close(); });   // a click on the dimmed backdrop
+document.getElementById('dj-set').addEventListener('click',openSettings);
+
 // ---------- input ----------
 const keys={};
 const GRAB_KEYS={KeyA:'Melon',KeyD:'Indy',KeyW:'Nose',KeyS:'Tail'};
@@ -1790,7 +1863,7 @@ function onDown(code){
   if(GRAB_KEYS[code])R.grabHeld[GRAB_KEYS[code]]=true;
   if(code==='KeyV')cycleCam();
   if(code==='KeyR' && !fade.active)fadeOut(()=>resetRider());
-  if(code==='KeyM'){muted=!muted; if(master)master.gain.value=muted?0:0.9;}
+  if(code==='KeyM')setMuted(!muted);
   if(code==='KeyN')djNext();
   if(code==='KeyB')djPrev();
   if(code==='KeyP'){ if(qualityAuto){qualityAuto=false;setQuality(2);} else if(quality>0){setQuality(quality-1);} else {qualityAuto=true;setQuality(2);} qualityTimer=0; }
@@ -1799,8 +1872,12 @@ function onUp(code){
   if(code==='Space'){ if(R.state==='riding' && R.loading)R.popRequest=true; R.loading=false; }
   if(GRAB_KEYS[code])R.grabHeld[GRAB_KEYS[code]]=false;
 }
-addEventListener('keydown',e=>{ if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault(); if(e.repeat)return; keys[e.code]=true; begin(); onDown(e.code); });
-addEventListener('keyup',e=>{ keys[e.code]=false; onUp(e.code); });
+addEventListener('keydown',e=>{
+  // with Settings open the dialog has the keyboard (arrows move sliders, Esc closes); only the music keys and mute pass
+  if(settingsEl.open){ if(!e.repeat && ['KeyM','KeyN','KeyB'].includes(e.code))onDown(e.code); return; }
+  if(e.code==='Escape'){ e.preventDefault(); if(!e.repeat){ begin(); openSettings(); } return; }   // preventDefault, or this same Esc closes it again
+  if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault(); if(e.repeat)return; keys[e.code]=true; begin(); onDown(e.code); });
+addEventListener('keyup',e=>{ keys[e.code]=false; if(!settingsEl.open)onUp(e.code); });
 addEventListener('blur',()=>{ for(const k in keys)keys[k]=false; for(const k in R.grabHeld)R.grabHeld[k]=false; R.loading=false; });
 document.getElementById('go').addEventListener('click',begin);
 canvas.addEventListener('pointerdown',()=>{ if(started)canvas.focus(); });
@@ -1913,8 +1990,8 @@ function frame(now){
   requestAnimationFrame(frame);
   const raw=(now-last)/1000; let dt=Math.min(0.05,raw); last=now; if(dt<=0)dt=0.0001;
   if(document.visibilityState==='visible' && raw<0.5)autoQuality(raw);
-  gatherInput(); physics(dt);
-  updateBoatVisual(); updateRiderVisual(dt); updateEffects(dt); updateCamera(dt,false); updateAudio(dt); djUpdate(dt); updateHUD(dt); updateFade(dt);
+  if(!paused){ gatherInput(); physics(dt); }   // Settings pauses the ride: the world holds still, sound and music play on
+  updateBoatVisual(); updateRiderVisual(paused?0.0001:dt); if(!paused)updateEffects(dt); updateCamera(dt,false); updateAudio(dt); djUpdate(dt); updateHUD(dt); updateFade(dt);
   // scrolling world
   const sp=WATER_SP; waterNear.position.set(Math.round(camera.position.x/sp)*sp,0,Math.round((camera.position.z+62)/sp)*sp);
   waterFar.position.set(camera.position.x,-0.02,camera.position.z);
