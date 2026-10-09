@@ -6,7 +6,8 @@ results against real-world targets, and draws the jump arcs over the wake so you
     pip install playwright matplotlib numpy
     playwright install chromium
     python tools/jump_bench.py                 # writes tools/out/jump_bench.png and prints a pass/fail table
-    python tools/jump_bench.py --three path/to/three.min.js   # use a local three.js when offline
+    python tools/jump_bench.py --three path/to/three           # offline: an unpacked three.js package, same version as
+                                                               # index.html (npm pack three@<version>, or node_modules/three)
 
 Each run cuts out a set distance beyond the wake, settles, then edges hard back in. Three rider styles:
   relaxed  no Space: the legs soak up the wake
@@ -25,10 +26,13 @@ import argparse
 import functools
 import http.server
 import pathlib
+import re
 import threading
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-THREE_CDN = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
+# the game loads three.js from jsDelivr through an import map; keep the bench on the same version
+THREE_VERSION = re.search(r"three@([0-9.]+)/build/three\.module\.js", (ROOT / "index.html").read_text()).group(1)
+THREE_CDN = f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/"
 
 RUNS = [
     {"cut": 3, "mode": "relaxed"},
@@ -156,8 +160,16 @@ def run_bench(three_path=None):
         browser = p.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"])
         page = browser.new_page(viewport={"width": 640, "height": 360})
         if three_path:
-            body = pathlib.Path(three_path).read_bytes()
-            page.route(THREE_CDN, lambda route: route.fulfill(body=body, content_type="text/javascript"))
+            # answer every three.js module request (the core, the glTF loader and what it imports) from the local package
+            root = pathlib.Path(three_path)
+
+            def local_three(route):
+                f = root / route.request.url[len(THREE_CDN):].split("?")[0]
+                if f.is_file():
+                    route.fulfill(body=f.read_bytes(), content_type="text/javascript")
+                else:
+                    route.fulfill(status=404, body="")
+            page.route(THREE_CDN + "**", local_three)
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(url)
@@ -277,7 +289,7 @@ def plot(results, out):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--three", help="local three.min.js (r128) to use instead of the CDN")
+    ap.add_argument("--three", help=f"an unpacked three.js {THREE_VERSION} package (with build/ and examples/) to use instead of the CDN")
     ap.add_argument("--out", default=str(ROOT / "tools" / "out" / "jump_bench.png"))
     args = ap.parse_args()
     res, tricks, crashes = run_bench(args.three)

@@ -6,7 +6,7 @@ A browser wakeboarding sim in the spirit of EA Skate. You ride a 65 ft line behi
 
 ## Run it
 
-Open `index.html` in any desktop browser. Everything is self-contained apart from three CDN loads: three.js r128 (cdnjs), its glTF loader (jsDelivr) and the Barlow Condensed / DM Sans fonts (Google Fonts). The rider model ships as `assets/rider.js`, so opening the file straight from disk works. A local server works too:
+Open `index.html` in any desktop browser. Everything is self-contained apart from two CDN loads: three.js r186 with its glTF loader (jsDelivr, as ES modules through an import map) and the Barlow Condensed / DM Sans fonts (Google Fonts). The rider model ships as `assets/rider.js`, so opening the file straight from disk works, as long as you're online for the CDN. The start button waits until the game has loaded. A local server works too:
 
 ```bash
 python3 -m http.server 8000
@@ -36,7 +36,8 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 ## How it works
 
 - **Water** is one analytic surface sampled by both the shader and the physics from the same formula: a boat-frame V wake whose outside is a ramp that steepens to a crisp lip (about 30° where a 65 ft line puts you), a steep inside face, a trough about half as deep as the crest is tall, prop wash, and ambient chop. The wake is tallest about 18 m behind the stern. On top of that the shader adds multi-octave ripple normals, a planar reflection of the boat, rider, shore and sky (mip-blurred with distance so far water smears the reflection like real chop), GGX sun glitter, crest translucency, and foam broken up by noise with the prop wash streaked along the boat's track. The water receives real shadow maps from the rider and boat.
-- **Lighting** is linear HDR. The scene renders into a multisampled offscreen target and a post pass adds bloom, ACES tone mapping, a mild grade, vignette and grain. An analytic sky with a procedural cloud layer doubles as the environment map, so gelcoat, skin and the wet board pick up proper reflections.
+- **Lighting** is linear HDR in physical units. The scene renders into a multisampled offscreen target and a post pass adds bloom, ACES tone mapping, a mild grade, vignette and grain. An analytic sky with a procedural cloud layer doubles as the environment map, so gelcoat, skin and the wet board pick up proper reflections. Below the horizon the map is the lake, dark with a grazing reflection of the haze, so nothing is lit from underneath. It leaves the sun disc out, since the sun light draws its own highlight.
+- **Materials** on the rider are physical. The vest and shorts have a fabric sheen, the skin a little warm sheen (a cheap stand-in for light scattering under it), and the helmet, lenses and board a clearcoat. A fall soaks the rider and landings splash them: wet fabric goes darker, wet skin glossier, and they dry off over about 15 seconds.
 - **Shoreline** sits 76 m either side of the course: sand, grass and a few thousand instanced trees, built three periods long so the whole bank snaps forward seamlessly as the boat travels. Hazy ridges close the horizon.
 - **Rope** is a stiff spring that only pulls (a poly-E line stretches 2–3% under a hard cut). It goes slack when you run at the boat and snaps tight with a jolt; pull more than 2.8 times your body weight and the handle is gone. The HUD shows the line load. Cutting out and edging back in gives the real pendulum effect, and the edge's side force comes with drag, so a rider tops out around 1.2–1.35 times boat speed.
 - **Takeoff** happens at the lip, where the surface falls away faster than gravity can follow, and the board leaves with the speed it had going up the ramp. Relaxed legs soak up about 2.4 m/s of that, so cutting out over the wake is just a bump. Hold Space and you stand tall through the lip; let go partway up the ramp and your legs extend through it, adding 0.5–1.5 m/s. Let go on flat water and it's an ollie.
@@ -66,12 +67,15 @@ Body shape (gender, age, muscle, weight, height, proportions) and outfit colours
 ```bash
 pip install playwright matplotlib numpy && playwright install chromium
 python tools/jump_bench.py        # table in the terminal, plot in tools/out/jump_bench.png
+python tools/jump_bench.py --three path/to/three   # offline: an unpacked three.js package of the same version
 ```
 
 
 The physics constants sit at the top of the script in `index.html`: boat speed, rope length, edge grip and cap, drag, pop strength, and `ROT` (how fast each rotation turns open and tucked, and the most a takeoff can wind up). The ragdoll is tuned by the `RAG_` constants in its own section: each body part's mass, size, volume and drag, the board's drag along, across and through it, and how soon the rider comes round. The wake shape is the `wake()` function, written once in GLSL and once in JavaScript; keep the two in step.
 
-Look and feel lives in a few places: the sun direction and fog colour next to the renderer, the sky colours in `SKY_GLSL`, the water colours, glitter and foam thresholds in `waterMaterial()`, the post grade in `post.finalMat`, and the quality tiers in `QUALITY`.
+Look and feel lives in a few places: the sun direction, light intensities and fog colour next to the renderer, the rider's materials and wetness in `RIDER_MAT`, the sky colours in `SKY_GLSL`, the water colours, glitter and foam thresholds in `waterMaterial()`, the post grade in `post.finalMat`, and the quality tiers in `QUALITY`.
+
+three.js now ships only as ES modules, while the game is one ordinary script whose state the bench drives from outside. So a small module at the top of `index.html` loads three.js, makes it the global `THREE`, and then runs the game script (kept in a `<script type="text/plain">` block) as a plain script. To move to a newer three.js, change the version in the import map; the bench picks it up from there.
 
 One trap worth knowing about: never zero out a shader term by multiplying by `step()` or a `uNear`-style flag. If the other factor is NaN or infinite (an `exp()` overflow, a `smoothstep()` whose edges have crossed, a `sin()` of a huge world coordinate), `0 * NaN` is still NaN and it shows up as white patches on the water. Branch instead.
 
