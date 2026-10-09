@@ -50,7 +50,7 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 
 ## The rider model
 
-The rider is the MakeHuman base body (CC0) with MPFB2's 53-bone game skeleton, dressed in board shorts, an impact vest, wake boots, a helmet and sunglasses. `tools/build_rider.py` builds it with plain Python and numpy: it morphs the body with MPFB2's shape targets, fits the skeleton and its skin weights, grows the clothing out of the body surface (so it bends exactly like the skin) and deletes the skin it hides, then writes `assets/rider.glb` and `assets/rider.js` (the same bytes as base64, so the game loads it without a web server).
+The rider is the MakeHuman base body (CC0) with MPFB2's 53-bone game skeleton, dressed in board shorts, an impact vest, wake boots, a helmet and a pair of Lobster sunglasses (pink frame, orange mirror lens) that sit just off the face and run their arms back over the ears. `tools/build_rider.py` builds it with plain Python and numpy: it morphs the body with MPFB2's shape targets, fits the skeleton and its skin weights, grows the clothing out of the body surface (so it bends exactly like the skin) and deletes the skin it hides, then writes `assets/rider.glb` and `assets/rider.js` (the same bytes as base64, so the game loads it without a web server).
 
 ```bash
 git clone --depth 1 https://github.com/makehumancommunity/mpfb2 ../mpfb2
@@ -81,4 +81,4 @@ Rider body, skeleton and skin weights: the MakeHuman base mesh and MPFB2 game-en
 
 ## Branding
 
-The game is presented by Lobster Eyewear. The logo (`assets/lobster-logo.png`) comes from the Lobster logo pack, and the HUD colours are sampled from it: navy `#1f1b48`, yellow `#ffed00`, hot pink `#e6007e`. On-screen copy follows the Lobster voice in the `twg-brand-skills` repo (`skills/lobster-eyewear.md`): short sentences, UK English, cheeky, no em dashes.
+The game is presented by Lobster Eyewear. The logo (`assets/lobster-logo.svg`, the full-colour Lobster Eyewear mark with its empty margins cropped) is the only logo used: on the start screen and at the top of the screen during play. The HUD colours are the logo's own: navy `#1f1b48`, yellow `#ffed00`, hot pink `#e6007e`. The rider wears a pair of Lobsters too: neon pink frame and arms, orange mirror lens. On-screen copy follows the Lobster voice in the `twg-brand-skills` repo (`skills/lobster-eyewear.md`): short sentences, UK English, cheeky, no em dashes.

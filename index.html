@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&family=DM+Sans:wght@400;500&display=swap">
 <style>
 /* Layout: full-bleed WebGL canvas, HUD pinned to corners, trick callouts centred. Single committed look (bright lake, Lobster-navy glass HUD).
-   Brand colours are sampled from the Lobster logo (assets/lobster-logo.png): navy #1f1b48, yellow #ffed00, hot pink #e6007e. */
+   Brand colours are the Lobster logo's own (assets/lobster-logo.svg): navy #1f1b48, yellow #ffed00, hot pink #e6007e. */
 :root{
   --bg:#110e2a;            /* fallback ground behind the canvas */
   --ink:#f4f8fa;           /* HUD text */
@@ -46,24 +46,28 @@ body{padding:0}
 #controls kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase}
 #start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(17,14,42,.35),rgba(17,14,42,.88));pointer-events:auto;transition:opacity .5s;overflow-y:auto;touch-action:pan-y;padding:12px 0;box-sizing:border-box}
 #start.hide{opacity:0;pointer-events:none}
-.card{margin:auto;max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:28px 30px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.card{margin:auto;max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:24px 30px 22px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .card .presents{font-family:var(--display);font-weight:700;font-size:clamp(14px,2.4vw,18px);letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 10px}
 .card .presents b{font-weight:800;color:var(--ink)}
-.card .presents{display:flex;align-items:center;gap:12px;margin:0 0 14px;font-family:var(--display);font-weight:700;font-size:clamp(13px,2.2vw,16px);letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim)}
-.card .presents img{display:block;height:clamp(30px,5.4vw,42px);width:auto}
+.card .presents{display:flex;align-items:center;gap:12px;margin:0 0 10px;font-family:var(--display);font-weight:700;font-size:clamp(13px,2.2vw,16px);letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim)}
+.card .presents img{display:block;height:clamp(52px,8vw,58px);width:auto}
 .card h1{font-family:var(--display);font-weight:800;font-size:clamp(44px,9vw,84px);line-height:.92;margin:0;letter-spacing:.01em;text-transform:uppercase}
 .card h1 em{font-style:normal;color:var(--accent);white-space:nowrap}
-.card .tagline{font-family:var(--display);font-weight:800;font-size:clamp(18px,3vw,24px);letter-spacing:.04em;text-transform:uppercase;color:var(--pink);margin-top:10px}
-.card p{margin:12px 0 0;color:var(--ink-dim);line-height:1.55;max-width:60ch}
-.card .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;margin-top:18px;font-size:13px}
+.card .tagline{font-family:var(--display);font-weight:800;font-size:clamp(18px,3vw,24px);letter-spacing:.04em;text-transform:uppercase;color:var(--pink);margin-top:8px}
+.card p{margin:10px 0 0;color:var(--ink-dim);line-height:1.55;max-width:60ch}
+.card .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;margin-top:14px;font-size:13px}
 .card .grid div{display:flex;justify-content:space-between;gap:10px;align-items:center;min-width:0}
 .card .grid span:first-child{white-space:nowrap}
 .card .grid span:last-child{color:var(--ink-dim);text-align:right}
 .card kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
-.card button{margin-top:22px;font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent);color:var(--navy);border:0;border-radius:6px;padding:12px 26px;cursor:pointer;width:calc(100% - 5px);box-shadow:5px 5px 0 var(--pink)}
+.card button{margin-top:18px;font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent);color:var(--navy);border:0;border-radius:6px;padding:12px 26px;cursor:pointer;width:calc(100% - 5px);box-shadow:5px 5px 0 var(--pink)}
 .card button:focus-visible{outline:3px solid #fff;outline-offset:2px}
 .card .note{font-size:12px;margin-top:10px;text-align:center}
 #fade{position:absolute;inset:0;background:#110e2a;opacity:0;pointer-events:none;transition:opacity .25s}
+/* the Lobster logo rides along at the top centre once the session starts */
+#bug{position:absolute;left:50%;top:calc(10px + env(safe-area-inset-top,0px));transform:translateX(-50%);height:clamp(40px,7vh,60px);width:auto;opacity:0;transition:opacity .6s;filter:drop-shadow(0 2px 6px rgba(0,0,0,.35))}
+body.started #bug{opacity:1}
+@media (max-width:560px){#bug{top:calc(14px + env(safe-area-inset-top,0px) + 108px);height:36px}}
 #gp{position:absolute;right:16px;bottom:calc(14px + env(safe-area-inset-bottom,0px));font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);display:none}
 @media (max-width:640px){.big{font-size:30px}#controls{display:none}.card .grid{grid-template-columns:1fr}.card{padding:22px}}
 /* touch layer */
@@ -133,11 +137,12 @@ body.touch .card .grid.tc{display:grid}
     <span><kbd>M</kbd> sound</span>
     <span><kbd>P</kbd> quality</span>
   </div>
+  <img id="bug" src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349">
   <div id="gp">Gamepad connected</div>
   <div id="fade"></div>
   <div id="start">
     <div class="card">
-      <div class="presents"><img src="assets/lobster-logo.png" alt="Lobster" width="739" height="140"><span>presents</span></div>
+      <div class="presents"><img src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349"><span>presents</span></div>
       <h1>Thursday <em>Yacht Club</em></h1>
       <div class="tagline">No Risk, No Story.</div>
       <p>The boat's doing 21 mph on a 65 ft line. Cut out wide, then edge hard back at the wake. Hold <kbd>Space</kbd> on the way in to load the line, and let go at the lip to pop. Clear both wakes for the bonus. Spins are set at the lip: tap a direction for a 180, hold it to wind up more. Keep pushing to tuck and spin faster, push back to open up and slow it. Land straight, or catch an edge and drink half the lake.</p>
