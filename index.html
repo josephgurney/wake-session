@@ -155,6 +155,8 @@ body.touch .card .grid.tc{display:grid}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="assets/rider.js"></script>
 <script>
 'use strict';
 /* =====================================================================
@@ -716,9 +718,11 @@ const P={}; // parts
   const board=new THREE.Mesh(rocker(new THREE.ExtrudeGeometry(rr(0.42,1.40,0.17),{depth:0.028,bevelEnabled:true,bevelThickness:0.006,bevelSize:0.006,bevelSegments:2,curveSegments:16}),0.05,0.7),RM.boardBase);
   board.rotation.x=-Math.PI/2; rider.add(board);
   const top=new THREE.Mesh(rocker(new THREE.ExtrudeGeometry(rr(0.40,1.36,0.16),{depth:0.012,bevelEnabled:false,curveSegments:16}),0.05,0.68),RM.boardTop); top.rotation.x=-Math.PI/2; top.position.y=0.028; rider.add(top);
+  P.bindings=[];
   for(const z of [0.26,-0.26]){
     const b=new THREE.Mesh(new THREE.BoxGeometry(0.30,0.1,0.24),RM.bind);b.position.set(0,0.09,z);b.rotation.y=(z>0?1:-1)*12*DEG;rider.add(b);
     const liner=new THREE.Mesh(new THREE.BoxGeometry(0.24,0.05,0.16),RM.accent);liner.position.set(0,0.165,z);liner.rotation.y=b.rotation.y;rider.add(liner);
+    P.bindings.push(b,liner);
   }
   for(const z of [0.62,-0.62]){const fin=new THREE.Mesh(new THREE.BoxGeometry(0.02,0.04,0.12),RM.bind);fin.position.set(0,-0.02,z);rider.add(fin);}
   P.pelvis=new THREE.Mesh(new THREE.CylinderGeometry(0.135,0.125,0.2,14),RM.shorts); rider.add(P.pelvis);
@@ -741,16 +745,16 @@ const handle=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.36,8),mat(0
 const ropeSegs=[]; {const m=mat(0xe8e4d8,{roughness:0.9});for(let i=0;i<16;i++){const s=new THREE.Mesh(new THREE.CylinderGeometry(0.011,0.011,1,5),m);scene.add(s);ropeSegs.push(s);}}
 
 // joints, all in rider space: board along z (nose +z), chest facing -x, feet locked in the bindings
-const J={hips:V3(),hipF:V3(),hipB:V3(),kneeF:V3(),kneeB:V3(),footF:V3(0,0.07,0.26),footB:V3(0,0.07,-0.26),sh:V3(),shF:V3(),shB:V3(),elF:V3(),elB:V3(),handF:V3(),handB:V3(),head:V3(),C:V3(),torsoDir:V3(),axis:V3(),handle:V3(),handleAxis:V3(),look:V3()};
+const J={hips:V3(),hipF:V3(),hipB:V3(),kneeF:V3(),kneeB:V3(),footF:V3(0,0.07,0.26),footB:V3(0,0.07,-0.26),sh:V3(),shF:V3(),shB:V3(),elF:V3(),elB:V3(),handF:V3(),handB:V3(),head:V3(),C:V3(),torsoDir:V3(),axis:V3(),handle:V3(),handleAxis:V3(),look:V3(),headUp:V3(0,1,0),headLeft:V3(0,0,1),poleF:V3(),poleB:V3()};
 const FACING=-1; // regular stance: chest faces local -x
-const LEG=0.47, BOARD_C=V3(0,0.07,0);
+let LEG=0.47; const BOARD_C=V3(0,0.07,0); // thigh/shin length and ankle centre; the skinned model swaps in its own
 // where each grab takes hold of the board: indy/tail with the back hand, melon/nose with the front
 const GRAB_PT={Indy:V3(FACING*0.22,0.05,-0.08),Tail:V3(0,0.05,-0.67),Melon:V3(-FACING*0.22,0.05,0.08),Nose:V3(0,0.05,0.67)};
 const _b=V3(), _pt=V3(), _pd=V3(), _hx=V3(), _hy=V3(), _hm=new THREE.Matrix4();
 function solvePose(p){
   const c=p.crouch, B=p.axis;
   // Hips sit on the line from the board to the centre of mass (p.axis), dropping and sitting back as the knees bend.
-  J.hips.copy(BOARD_C).addScaledVector(B,0.93-0.40*c); J.hips.x-=FACING*0.07*c;
+  J.hips.copy(BOARD_C).addScaledVector(B,2*LEG*(0.989-0.426*c)); J.hips.x-=FACING*0.07*c;
   // a deep lean would pull the front foot out of its binding: slide the hips back within reach of both feet
   for(let k=0;k<2;k++)for(const s of [1,-1]){
     const foot=s>0?J.footF:J.footB; _pd.copy(foot).sub(J.hips); _pd.z-=s*0.11;
@@ -791,12 +795,12 @@ function solvePose(p){
   if(p.bail>0){J.handF.copy(J.shF).add(tmp.set(Math.sin(p.bail*11)*0.5,0.2+Math.cos(p.bail*8)*0.4,0.3));J.handB.copy(J.shB).add(tmp.set(Math.cos(p.bail*9)*0.5,0.1+Math.sin(p.bail*10)*0.4,-0.3));}
   const poleF=V3().copy(C).multiplyScalar(-0.5).addScaledVector(UP,-0.6).addScaledVector(axis,0.5);
   const poleB=V3().copy(C).multiplyScalar(-0.5).addScaledVector(UP,-0.6).addScaledVector(axis,-0.5);
-  ik2(J.shF,J.handF,0.29,0.28,poleF,J.elF); ik2(J.shB,J.handB,0.29,0.28,poleB,J.elB);
+  ik2(J.shF,J.handF,0.29,0.28,poleF,J.elF); ik2(J.shB,J.handB,0.29,0.28,poleB,J.elB); J.poleF.copy(poleF); J.poleB.copy(poleB);
   // head turns toward what the rider is watching, as far as a neck allows (about 80° either side of the chest)
   const look=J.look.copy(p.look).sub(J.head).normalize();
   for(let i=0;i<8;i++){ _hx.copy(look).addScaledVector(torsoDir,-look.dot(torsoDir)); _hy.copy(C).addScaledVector(torsoDir,-C.dot(torsoDir));
     if(_hx.normalize().dot(_hy.normalize())>=0.17)break; look.addScaledVector(_hy,0.3).normalize(); }
-  _hy.copy(torsoDir).addScaledVector(look,-torsoDir.dot(look)).normalize(); _hx.crossVectors(_hy,look);
+  _hy.copy(torsoDir).addScaledVector(look,-torsoDir.dot(look)).normalize(); _hx.crossVectors(_hy,look); J.headUp.copy(_hy); J.headLeft.copy(_hx);
   // place meshes
   P.pelvis.position.copy(J.hips); P.pelvis.quaternion.setFromUnitVectors(UP,B);
   placeLimb(P.torso,V3().copy(J.hips).addScaledVector(torsoDir,0.04),J.sh);
@@ -809,6 +813,112 @@ function solvePose(p){
   P.shJF.position.copy(J.shF); P.shJB.position.copy(J.shB); P.elJF.position.copy(J.elF); P.elJB.position.copy(J.elB); P.kneeF.position.copy(J.kneeF); P.kneeB.position.copy(J.kneeB);
   _b.copy(J.kneeF).sub(J.footF).normalize(); P.bootF.position.copy(J.footF).addScaledVector(_b,0.07); P.bootF.quaternion.setFromUnitVectors(UP,_b);
   _b.copy(J.kneeB).sub(J.footB).normalize(); P.bootB.position.copy(J.footB).addScaledVector(_b,0.07); P.bootB.quaternion.setFromUnitVectors(UP,_b);
+}
+
+// ---------- rider model: a skinned human (assets/rider.js, built by tools/build_rider.py), posed from the solver's joints ----------
+// Every bone's bind rotation is identity, so a bone's rest frame is the model's own axes (+x left, +y up, +z forward) and
+// posing is a matter of turning each rest frame onto a target frame. Arms and legs are re-solved on the model's real bone
+// lengths, from its real shoulders and hips, so hands land on the handle and soles on the board.
+const RIG={ready:false,bones:{},rest:{},rd:{},wq:{},wp:{},curl:{},grip:1};
+const RX=V3(1,0,0), RY=V3(0,1,0), RZ=V3(0,0,1);
+const _fa=V3(),_fb=V3(),_fc=V3(),_ga=V3(),_gb=V3(),_gc=V3(),_fm1=new THREE.Matrix4(),_fm2=new THREE.Matrix4(),_rq=new THREE.Quaternion(),_rq2=new THREE.Quaternion();
+const _r1=V3(),_r2=V3(),_r3=V3(),_r4=V3(),_r5=V3(),_r6=V3(),_r7=V3(),_r8=V3(),_r9=V3();
+// rotation carrying the frame (main axis a1, second axis b1) onto (a2, b2)
+function frameQuat(a1,b1,a2,b2,out){
+  _fa.copy(a1).normalize(); _fb.copy(b1).addScaledVector(_fa,-b1.dot(_fa)).normalize(); _fc.crossVectors(_fa,_fb);
+  _ga.copy(a2).normalize(); _gb.copy(b2).addScaledVector(_ga,-b2.dot(_ga));
+  if(_gb.lengthSq()<1e-8)_gb.crossVectors(_ga,Math.abs(_ga.y)<0.9?RY:RX);
+  _gb.normalize(); _gc.crossVectors(_ga,_gb);
+  _fm1.makeBasis(_fa,_fb,_fc).transpose(); _fm2.makeBasis(_ga,_gb,_gc).multiply(_fm1);
+  return out.setFromRotationMatrix(_fm2);
+}
+function loadRiderModel(){
+  if(!window.WAKE_RIDER_GLB || !THREE.GLTFLoader) return; // no model: the primitive rider carries on
+  let buf;
+  try{ const s=atob(window.WAKE_RIDER_GLB); buf=new Uint8Array(s.length); for(let i=0;i<s.length;i++)buf[i]=s.charCodeAt(i); }catch(e){ return; }
+  new THREE.GLTFLoader().parse(buf.buffer,'',g=>{ try{ setupRig(g); }catch(e){ console.warn('rider model:',e); } },e=>console.warn('rider model:',e));
+}
+function setupRig(gltf){
+  const model=gltf.scene, holder=new THREE.Group(), R=RIG;
+  holder.rotation.y=-Math.PI/2; holder.add(model); // the model faces +z; the rider's chest faces -x, nose of the board on their left
+  const info=(model.getObjectByName('Rider')||model).userData||{};
+  model.traverse(o=>{ if(o.isBone)R.bones[o.name]=o; if(o.isMesh){ o.castShadow=true; o.frustumCulled=false; } });
+  if(!R.bones.Root||!R.bones.hand_l) return;
+  (function walk(b,at){ R.rest[b.name]=V3().copy(b.position).add(at); R.wq[b.name]=new THREE.Quaternion(); R.wp[b.name]=V3();
+    for(const ch of b.children) if(ch.isBone) walk(ch,R.rest[b.name]); })(R.bones.Root,V3());
+  const rest=R.rest, dir=(a,b)=>V3().subVectors(rest[b],rest[a]).normalize();
+  for(const [a,b] of [['pelvis','spine_01'],['spine_01','spine_02'],['spine_02','spine_03'],['spine_03','neck_01'],['neck_01','head'],
+    ['upperarm_l','lowerarm_l'],['lowerarm_l','hand_l'],['upperarm_r','lowerarm_r'],['lowerarm_r','hand_r'],
+    ['thigh_l','calf_l'],['calf_l','foot_l'],['thigh_r','calf_r'],['calf_r','foot_r']]) R.rd[a]=dir(a,b);
+  const len=(a,b)=>rest[a].distanceTo(rest[b]);
+  R.arm1=len('upperarm_l','lowerarm_l'); R.arm2=len('lowerarm_l','hand_l'); R.leg1=len('thigh_l','calf_l'); R.leg2=len('calf_l','foot_l');
+  for(const s of ['l','r']){
+    // back of the hand at rest (the thumb sits on the palm side), and the axis each finger folds about toward the palm
+    const h=rest['hand_'+s], f=dir('hand_'+s,'middle_01_'+s), k=dir('pinky_01_'+s,'index_01_'+s);
+    const back=V3().crossVectors(f,k).normalize(); if(V3().subVectors(rest['thumb_02_'+s],h).dot(back)>0)back.negate(); R['back_'+s]=back;
+    for(const fn of ['index','middle','ring','pinky','thumb']) R.curl[fn+'_'+s]=V3().crossVectors(dir(fn+'_01_'+s,fn+'_02_'+s),V3().copy(back).negate()).normalize();
+    const ff=dir('foot_'+s,'ball_'+s); ff.y=0; R['footFwd_'+s]=ff.normalize();
+  }
+  // stand the model in the bindings: its own leg length, ankles at sole height on the board, feet centred across it
+  const ankleH=info.ankleHeight||0.08, toe=info.toeReach||0.17, heel=info.heelReach||0.06;
+  LEG=(R.leg1+R.leg2)/2; BOARD_C.y=0.04+0.026+ankleH;
+  for(const [foot,sz,key] of [[J.footF,1,'toesF'],[J.footB,-1,'toesB']]){
+    R[key]=V3(FACING*Math.cos(12*DEG),0,sz*Math.sin(12*DEG)); // duck stance: front toes angled to the nose, back toes to the tail
+    foot.set(0,BOARD_C.y,0.26*sz).addScaledVector(R[key],-(toe-heel)/2);
+  }
+  R.qInv=new THREE.Quaternion().copy(holder.quaternion).invert();
+  for(const k in P){ const o=P[k]; if(o&&o.isMesh)o.visible=false; }
+  for(const o of P.bindings)o.visible=false;
+  rider.add(holder); R.holder=holder; R.ready=true;
+}
+const toM=(v,out)=>out.copy(v).applyQuaternion(RIG.qInv); // rider space -> model space (the holder sits at the rider's origin)
+function setWorld(name,q){ const b=RIG.bones[name]; RIG.wq[name].copy(q); b.quaternion.copy(_rq2.copy(RIG.wq[b.parent.name]).invert().multiply(q)); }
+function fk(name){ const b=RIG.bones[name]; return RIG.wp[name].copy(b.position).applyQuaternion(RIG.wq[b.parent.name]).add(RIG.wp[b.parent.name]); }
+const FINGER_CURL=[60,75,45], THUMB_CURL=[15,30,25]; // degrees each finger joint folds round the handle
+function driveRig(dt){
+  const R=RIG, B=R.bones, q=_rq;
+  const axis=toM(poseParams.axis,_r1), torso=toM(J.torsoDir,_r2), hipL=toM(_r3.subVectors(J.hipF,J.hipB),_r3), shL=toM(J.axis,_r4);
+  // hips and spine: the pelvis follows the legs' line, the spine bends from it toward the torso, twisting from hips to shoulders
+  B.Root.quaternion.identity(); R.wq.Root.identity();
+  const mixUp=(t,out)=>out.copy(axis).lerp(torso,t).normalize(), mixL=(t,out)=>out.copy(hipL).lerp(shL,t).normalize();
+  frameQuat(R.rd.pelvis,RX,mixUp(0.3,_r5),hipL,q); setWorld('pelvis',q);
+  // place the pelvis so the midpoint of the two hip joints lands on the solver's hips
+  _r6.addVectors(B.thigh_l.position,B.thigh_r.position).multiplyScalar(0.5).applyQuaternion(R.wq.pelvis);
+  R.wp.pelvis.copy(toM(J.hips,_r5)).sub(_r6); B.Root.position.copy(R.wp.pelvis).sub(B.pelvis.position); R.wp.Root.copy(B.Root.position);
+  frameQuat(R.rd.spine_01,RX,mixUp(0.6,_r5),mixL(0.5,_r6),q); setWorld('spine_01',q);
+  frameQuat(R.rd.spine_02,RX,mixUp(0.9,_r5),mixL(0.85,_r6),q); setWorld('spine_02',q);
+  frameQuat(R.rd.spine_03,RX,torso,shL,q); setWorld('spine_03',q);
+  const look=toM(J.look,_r7), hUp=toM(J.headUp,_r8);
+  frameQuat(R.rd.neck_01,RX,_r5.copy(torso).multiplyScalar(0.7).addScaledVector(hUp,0.3),_r6.copy(shL).lerp(toM(J.headLeft,_r9),0.5),q); setWorld('neck_01',q);
+  frameQuat(RZ,RY,look,hUp,q); setWorld('head',q);
+  setWorld('clavicle_l',R.wq.spine_03); setWorld('clavicle_r',R.wq.spine_03);
+  for(const n of ['pelvis','spine_01','spine_02','spine_03','clavicle_l','clavicle_r','upperarm_l','upperarm_r','thigh_l','thigh_r'])if(n!=='pelvis')fk(n);
+  // legs: knee from a two-bone solve to the ankle in the binding, foot flat on the board
+  const up=toM(UP,_r9);
+  for(const [s,foot,toes,pz] of [['l',J.footF,R.toesF,0.3],['r',J.footB,R.toesB,-0.15]]){
+    const H=R.wp['thigh_'+s], A=toM(foot,_r5), K=_r6, pole=toM(_r7.set(FACING,0,pz),_r7);
+    ik2(H,A,R.leg1,R.leg2,pole,K);
+    // which way the knee points: the knee's offset from the hip-ankle line
+    const t=_r8.subVectors(A,H), kneeFwd=_r3.subVectors(K,H);
+    kneeFwd.addScaledVector(t,-kneeFwd.dot(t)/Math.max(t.lengthSq(),1e-6));
+    if(kneeFwd.lengthSq()<1e-6)kneeFwd.copy(pole);
+    frameQuat(R.rd['thigh_'+s],RZ,_r8.subVectors(K,H),kneeFwd,q); setWorld('thigh_'+s,q); fk('calf_'+s);
+    frameQuat(R.rd['calf_'+s],RZ,_r8.subVectors(A,K),kneeFwd,q); setWorld('calf_'+s,q); fk('foot_'+s);
+    frameQuat(R['footFwd_'+s],RY,toM(toes,_r8),up,q); setWorld('foot_'+s,q); setWorld('ball_'+s,q);
+  }
+  // arms: wrist a palm's width short of the grip point, elbow toward the solver's pole, back of the hand up on the bar
+  R.grip=damp(R.grip,poseParams.bail>0?0.15:1,8,dt);
+  for(const [s,hand,pole] of [['l',J.handF,J.poleF],['r',J.handB,J.poleB]]){
+    const S=R.wp['upperarm_'+s], G=toM(hand,_r5), W=_r6.subVectors(G,S); const d=W.length();
+    W.multiplyScalar(Math.max(0,d-0.075)/Math.max(d,1e-6)).add(S);
+    const E=_r7; ik2(S,W,R.arm1,R.arm2,toM(pole,_r8),E);
+    const fore=_r3.subVectors(W,E), upper=_r4.subVectors(E,S), flex=_r8.copy(fore).addScaledVector(upper,-fore.dot(upper)/Math.max(upper.lengthSq(),1e-6));
+    if(flex.lengthSq()<1e-6)toM(pole,flex).negate();
+    frameQuat(R.rd['upperarm_'+s],RZ,upper,flex,q); setWorld('upperarm_'+s,q);
+    frameQuat(R.rd['lowerarm_'+s],R['back_'+s],fore,up,q); setWorld('lowerarm_'+s,q); setWorld('hand_'+s,q);
+    for(const fn of ['index','middle','ring','pinky','thumb']){ const ang=fn==='thumb'?THUMB_CURL:FINGER_CURL;
+      for(let i=1;i<=3;i++) B[fn+'_0'+i+'_'+s].quaternion.setFromAxisAngle(R.curl[fn+'_'+s],ang[i-1]*DEG*R.grip); }
+  }
 }
 
 // ---------- particles ----------
@@ -1076,6 +1186,7 @@ function updateRiderVisual(dt){
   poseParams.twist=damp(poseParams.twist,R.state==='air'?0.25:0.35,5,dt);
   poseParams.bail=R.state==='bail'?R.bailT:0;
   solvePose(poseParams);
+  if(RIG.ready)driveRig(dt);
   // handle and rope follow the hands
   rider.localToWorld(handleW.copy(J.handle)); handleAxisW.copy(J.handleAxis).applyQuaternion(rider.quaternion).normalize();
   handle.position.copy(handleW); handle.quaternion.setFromUnitVectors(V3(1,0,0),handleAxisW);
@@ -1285,7 +1396,7 @@ function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false)
   renderer.getDrawingBufferSize(_dbs); const bw=Math.max(2,Math.floor(_dbs.x)),bh=Math.max(2,Math.floor(_dbs.y));
   post.sceneRT.setSize(bw,bh); post.bright.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurA.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurB.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2));
   post.finalMat.uniforms.uRes.value.set(bw,bh); reflRT.setSize(Math.max(2,Math.floor(bw*reflScale)),Math.max(2,Math.floor(bh*reflScale))); }
-addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2);
+addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2); loadRiderModel();
 resetRider(); updateCamera(0,true); updateSessionHUD();
 Object.defineProperty(R,'switchStanceAtTakeoff',{get(){return R._sst;},set(v){R._sst=v;}}); R._sst=false;
 const _takeoff=takeoff; // record stance at takeoff for FS/BS naming
