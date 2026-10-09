@@ -538,7 +538,7 @@ function renderReflection(){
 }
 
 // ---------- water ----------
-const waterUniforms={uTime:{value:0},uBoat:{value:V3()},uNear:{value:1},uDetail:{value:1},uSun:{value:SUN},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR},uRefl:{value:null},uTexMat:{value:reflTexMat},uReflOn:{value:1},uGlit:{value:0.12}};
+const waterUniforms={uTime:{value:0},uBoat:{value:V3()},uNear:{value:1},uDetail:{value:1},uSun:{value:SUN},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR},uRefl:{value:null},uTexMat:{value:reflTexMat},uReflOn:{value:1},uGlit:{value:0.12},uNearRect:{value:new THREE.Vector4()}};
 function waterMaterial(near){
   const u=THREE.UniformsUtils.merge([THREE.UniformsLib.lights,waterUniforms]);
   u.uNear.value=near; u.uRefl.value=reflRT.texture; u.uTexMat.value=reflTexMat; u.uSun.value=SUN; u.uFog.value=FOG_COLOR;
@@ -581,6 +581,7 @@ function waterMaterial(near){
       #include <lights_pars_begin>
       #include <shadowmap_pars_fragment>
       uniform float uDetail; uniform vec3 uFog; uniform float uFogNear; uniform float uFogFar; uniform sampler2D uRefl; uniform float uReflOn; uniform float uGlit;
+      uniform float uNear; uniform vec4 uNearRect;
       varying vec3 vWorld; varying vec3 vFoam; varying vec3 vN; varying vec4 vRefl;
       ${NOISE_GLSL} ${SKY_GLSL}
       float chop(vec2 p){
@@ -590,6 +591,10 @@ function waterMaterial(near){
         return h;
       }
       void main(){
+        // the far plane only fills in beyond the near mesh (uNearRect: its centre and half size, less a metre of overlap).
+        // Inside it, it would lie flat across the wake's troughs, and its kilometre-wide triangles lose so much depth
+        // precision right under the camera that it drew over the board
+        if(uNear<0.5 && abs(vWorld.x-uNearRect.x)<uNearRect.z && abs(vWorld.z-uNearRect.y)<uNearRect.w)discard;
         vec2 xz=vWorld.xz;
         vec3 toCam=cameraPosition-vWorld; float dist=length(toCam); vec3 V=toCam/dist;
         // fine ripple normals from a small animated height field; strength fades with distance so the horizon stays calm
@@ -774,23 +779,12 @@ function ik2(root,target,l1,l2,pole,out){
   const p=V3().copy(pole).addScaledVector(d,-pole.dot(d)); if(p.lengthSq()<1e-6)p.set(0,0,1).addScaledVector(d,-d.z); p.normalize();
   out.copy(root).addScaledVector(d,a).addScaledVector(p,hh);
 }
-// small procedural textures: fabric grain and the board graphic
+// small procedural texture: fabric grain
 function noiseTex(size,r,g,b,amp,seed){
   const c=document.createElement('canvas'); c.width=c.height=size; const x=c.getContext('2d'); const img=x.createImageData(size,size); const rnd=mulberry32(seed);
   for(let i=0;i<img.data.length;i+=4){ const n=(rnd()-0.5)*amp; img.data[i]=clamp(r+n,0,255); img.data[i+1]=clamp(g+n,0,255); img.data[i+2]=clamp(b+n,0,255); img.data[i+3]=255; }
   x.putImageData(img,0,0); const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(6,6); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=4; return t;
 }
-function boardTex(){
-  const c=document.createElement('canvas'); c.width=256; c.height=768; const x=c.getContext('2d');
-  x.fillStyle='#15161a'; x.fillRect(0,0,256,768);
-  x.save(); x.translate(128,384); x.rotate(-0.35);
-  for(let i=-6;i<=6;i++){ x.fillStyle=i%2?'#00b298':'#e9f1f0'; x.globalAlpha=i%2?0.9:0.35; x.fillRect(-400,i*54,800,10); }
-  x.restore(); x.globalAlpha=1;
-  x.fillStyle='#e9f1f0'; x.beginPath(); x.arc(128,190,42,0,Math.PI*2); x.fill(); x.fillStyle='#15161a'; x.beginPath(); x.arc(128,190,30,0,Math.PI*2); x.fill();
-  x.fillStyle='#00b298'; x.fillRect(96,520,64,8); x.fillRect(96,540,64,8);
-  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8; t.repeat.set(1/0.40,1/1.36); t.offset.set(0.5,0.5); return t;
-}
-function rocker(geo,amt,halfLen){ const p=geo.attributes.position; for(let i=0;i<p.count;i++){ const y=p.getY(i); p.setZ(i,p.getZ(i)+amt*Math.pow(y/halfLen,2)); } geo.computeVertexNormals(); return geo; }
 
 // ---------- boat ----------
 // A 21 ft open-bow wake boat after the 2008 Yamaha 212X, in Lobster livery. Boat frame: +z is the bow, +x is port and
@@ -1176,7 +1170,8 @@ function dressCrew(F,o){
     m.sheenColor.setRGB(0.3,0.3,0.32); mesh.material.dispose(); mesh.material=m; return m; };
   { const src=M.skin.material, m=new THREE.MeshPhysicalMaterial({name:'skin',vertexColors:true,roughness:src.roughness,sheen:0.3,sheenRoughness:0.5,clearcoat:0.04,clearcoatRoughness:0.35});
     m.sheenColor.setRGB(0.85,0.42,0.32); m.color.setRGB(...o.skin); src.dispose(); M.skin.material=m; }
-  if(M.vest)cloth(M.vest,o.top,0.85); if(M.shorts)cloth(M.shorts,o.shorts);
+  if(M.vest){ cloth(M.vest,o.top,0.85); thinShell(M.vest,0.7); } if(M.shorts)cloth(M.shorts,o.shorts);
+  if(M.strap)M.strap.visible=false; // no helmet, no chin strap
   if(M.boots){ // barefoot on the boat: the boots take the skin's colour and finish
     const m=M.skin.material.clone(); m.vertexColors=false; m.color.set(0xc99272).multiply(new THREE.Color().setRGB(...o.skin)); M.boots.material.dispose(); M.boots.material=m; }
   paintShirt(F,o.top);
@@ -1203,7 +1198,14 @@ function dressCrew(F,o){
       onHead(new THREE.TorusGeometry(0.03,0.006,6,20),djLed,cx+s*(hw+0.026),ey,cz,0,Math.PI/2,0); }
   }
 }
-// the rider's vest stops at the armpits; for a T-shirt, colour the skin over the shoulders and the top half of each
+// pull a garment most of the way back onto the skin along its offset from it (the _shell attribute the build writes),
+// so the rider's foam vest, quilting and all, becomes a T-shirt
+function thinShell(mesh,k){
+  const g=mesh.geometry, p=g.attributes.position, o=g.attributes._shell; if(!o)return;
+  for(let i=0;i<p.count;i++)p.setXYZ(i,p.getX(i)-o.getX(i)*k,p.getY(i)-o.getY(i)*k,p.getZ(i)-o.getZ(i)*k);
+  p.needsUpdate=true; g.computeVertexNormals(); g.computeBoundingBox(); g.computeBoundingSphere();
+}
+// the rider's vest covers the shoulders but not the arms; for a T-shirt, colour the skin over the top half of each
 // upper arm (picked out by the bones that move it) to match. The skin is vertex-coloured, so this costs nothing to draw.
 function paintShirt(F,hex){
   const m=F.mesh.skin, g=m.geometry, P=g.attributes.position, SI=g.attributes.skinIndex, SW=g.attributes.skinWeight, C=g.attributes.color;
@@ -1270,6 +1272,109 @@ function updateCrew(dt){
 scene.add(boat);
 const pylonW=V3(); function pylonPos(){return pylonW.set(0,PYLON_H,boatZ+PYLON_Z);}
 
+// ---------- the board: a 140 cm wakeboard after the reference, blue and black with neon green ----------
+// Continuous rocker that kicks up at the tips, rounded square tips with a small notch, straight rails, 1.8 cm thick
+// under the feet and under a centimetre at the tips, thinning to a crisp rail, and a small fin near each tip. Board
+// frame: z along it (nose +z), y up out of the deck. The base rides lift above the physics point (the water line), since
+// the water mesh, 0.7-1.4 m between vertices, can sit a touch above the true surface. plate: binding plate thickness.
+const BOARD={halfL:0.70, halfW:0.212, tip:0.20, thick:0.018, tipThick:0.007, rocker:0.048, kick:0.014, lift:0.006, plate:0.015};
+const BOARD_BLUE='#1d8fe3', BOARD_INK='#111317', NEON='#8fe31a';
+const boardHalfLen=u=>BOARD.halfL-BOARD.tip+BOARD.tip*Math.pow(Math.max(0,1-Math.pow(Math.abs(u),2.4)),1/2.4)-0.012*Math.exp(-((u/0.14)**2));
+const boardRocker=z=>BOARD.lift-0.004+BOARD.rocker*(z/BOARD.halfL)**2+BOARD.kick*smoothstep(0.45,BOARD.halfL,Math.abs(z))**2;
+// a point on the board from u across it (-1..1) and v along it (-1..1): x, the base's height, z, the deck's height
+function boardPoint(u,v){
+  const z=v*boardHalfLen(u), x=u*BOARD.halfW*(1-0.035*Math.min(1,(z/0.5)**2)), a=Math.abs(u);
+  const base=boardRocker(z)+0.0035*smoothstep(0.82,1,a); // the base bevels up into the rails
+  const t=(BOARD.tipThick+(BOARD.thick-BOARD.tipThick)*Math.pow(Math.max(0,1-(z/BOARD.halfL)**2),0.8))*(1-0.55*smoothstep(0.7,1,a));
+  return [x,base,z,base+t];
+}
+const boardDeckY=z=>boardPoint(0,z/boardHalfLen(0))[3];
+// the deck's graphic: black nose with three blue claw slashes, a neon pin line on the diagonal, blue tail with a
+// line-drawn lobster. Seen from above with the nose up, +x is to the left, so x maps the other way round to u.
+function paintBoardTop(c){
+  const x=c.getContext('2d'), w=c.width, h=c.height, ppm=w/(2*BOARD.halfW), X=m=>w*(0.5-m/(2*BOARD.halfW)), Z=m=>h*(0.5-m/(2*BOARD.halfL));
+  x.fillStyle=BOARD_BLUE; x.fillRect(0,0,w,h);
+  x.fillStyle=BOARD_INK; x.beginPath(); x.moveTo(X(-0.3),Z(0.04)); x.lineTo(X(0.3),Z(0.34)); x.lineTo(X(0.3),0); x.lineTo(X(-0.3),0); x.closePath(); x.fill();
+  x.strokeStyle=NEON; x.lineWidth=0.006*ppm; x.beginPath(); x.moveTo(X(-0.3),Z(0.0)); x.lineTo(X(0.3),Z(0.30)); x.stroke();
+  x.lineCap='round';
+  for(let k=0;k<3;k++){ // claw slashes, tapering toward the tail
+    const o=(k-1)*0.075, a=[X(-0.11+o),Z(0.64+o*0.3)], b=[X(0.12+o),Z(0.40+o*0.3)];
+    x.strokeStyle=BOARD_BLUE; x.lineWidth=0.034*ppm; x.beginPath(); x.moveTo(...a); x.quadraticCurveTo(X(0.04+o),Z(0.57+o*0.3),...b); x.stroke();
+    x.strokeStyle=BOARD_INK; x.lineWidth=0.012*ppm; x.beginPath(); x.moveTo(X(0.06+o),Z(0.47+o*0.3)); x.lineTo(...b); x.stroke();
+  }
+  x.fillStyle=NEON; for(let k=0;k<3;k++)x.fillRect(X(0.05-k*0.02),Z(-0.6),0.01*ppm,0.05*ppm);
+  x.fillRect(X(0.12),Z(0.13),0.06*ppm,0.008*ppm);
+  // the lobster, in line: carapace, tail segments and fan, claws, legs, antennae, eyes
+  x.save(); x.translate(X(0),Z(-0.47)); x.rotate(0.45); x.scale(ppm,ppm); x.strokeStyle=BOARD_INK; x.fillStyle=BOARD_INK; x.lineWidth=0.0045; x.lineJoin='round';
+  const ell=(cx,cy,rx,ry)=>{x.beginPath(); x.ellipse(cx,cy,rx,ry,0,0,Math.PI*2); x.stroke();};
+  ell(0,0,0.032,0.05);
+  for(let i=0;i<4;i++){ x.beginPath(); x.ellipse(0,0.06+i*0.026,0.028-i*0.003,0.014,0,0,Math.PI); x.stroke(); }
+  for(const s of [-1,0,1]){ x.beginPath(); x.ellipse(s*0.018,0.17,0.012,0.022,s*0.35,0,Math.PI*2); x.stroke(); }
+  for(const s of [-1,1]){
+    x.beginPath(); x.moveTo(s*0.026,-0.03); x.quadraticCurveTo(s*0.07,-0.06,s*0.06,-0.1); x.stroke();
+    x.beginPath(); x.moveTo(s*0.06,-0.1); x.quadraticCurveTo(s*0.1,-0.13,s*0.075,-0.18); x.quadraticCurveTo(s*0.06,-0.14,s*0.05,-0.12); x.stroke();
+    x.beginPath(); x.moveTo(s*0.06,-0.1); x.quadraticCurveTo(s*0.03,-0.14,s*0.045,-0.175); x.stroke();
+    for(let i=0;i<3;i++){ x.beginPath(); x.moveTo(s*0.03,0.0+i*0.016); x.lineTo(s*0.055,0.012+i*0.02); x.lineTo(s*0.062,0.03+i*0.02); x.stroke(); }
+    x.beginPath(); x.moveTo(s*0.01,-0.048); x.bezierCurveTo(s*0.03,-0.12,s*0.11,-0.15,s*0.13,-0.24); x.stroke();
+    x.beginPath(); x.arc(s*0.012,-0.052,0.0045,0,Math.PI*2); x.fill();
+  }
+  x.restore();
+  // a thin black line round the deck, just inside the rail
+  x.strokeStyle=BOARD_INK; x.lineWidth=0.01*ppm; x.beginPath();
+  for(let i=0;i<=200;i++){ const t=i/200*Math.PI*2, u=Math.cos(t)>=0?Math.pow(Math.abs(Math.cos(t)),0.6):-Math.pow(Math.abs(Math.cos(t)),0.6), [px,,pz]=boardPoint(u,Math.sin(t)>=0?1:-1);
+    const q=[X(px),Z(pz)]; i?x.lineTo(...q):x.moveTo(...q); }
+  x.closePath(); x.stroke();
+}
+// the base: blue, a black tail section, and the Lobster wordmark across the middle. Seen from below with the nose up,
+// +x is to the right, so here x maps straight to u.
+function paintBoardBase(c){
+  const x=c.getContext('2d'), w=c.width, h=c.height, ppm=w/(2*BOARD.halfW), X=m=>w*(0.5+m/(2*BOARD.halfW)), Z=m=>h*(0.5-m/(2*BOARD.halfL));
+  x.fillStyle=BOARD_BLUE; x.fillRect(0,0,w,h);
+  x.fillStyle=BOARD_INK; x.beginPath(); x.moveTo(X(-0.3),Z(-0.34)); x.lineTo(X(0.3),Z(-0.04)); x.lineTo(X(0.3),h); x.lineTo(X(-0.3),h); x.closePath(); x.fill();
+  x.strokeStyle=NEON; x.lineWidth=0.006*ppm; x.beginPath(); x.moveTo(X(-0.3),Z(-0.30)); x.lineTo(X(0.3),Z(0.0)); x.stroke();
+  if(lobsterOk()){ const iw=0.34*ppm, ih=iw*LOBSTER_IMG.naturalHeight/LOBSTER_IMG.naturalWidth; x.drawImage(LOBSTER_IMG,X(0)-iw/2,Z(0.33)-ih/2,iw,ih); }
+}
+// a quad ladder facing the way it should: flipped if its normal points away from want (checked in the middle of the
+// grid, since its corners can be sliver triangles)
+function ladderFacing(P,U,want){
+  let g=ladderGeo(P,U,false); const n=g.attributes.normal, k=(P.length>>1)*P[0].length+(P[0].length>>1);
+  if(n.getX(k)*want[0]+n.getY(k)*want[1]+n.getZ(k)*want[2]<0){ g.dispose(); g=ladderGeo(P,U,true); } return g; }
+function boardGeos(){
+  const NU=40, NV=80, us=[], top=[], bot=[], uvTop=[], uvBot=[];
+  for(let j=0;j<=NU;j++){ const s=-1+2*j/NU; us.push(Math.sign(s)*(1-(1-Math.abs(s))**2)); } // close together toward the rails
+  for(let i=0;i<=NV;i++){ const v=-1+2*i/NV, rt=[], rb=[], ut=[], ub=[];
+    for(const u of us){ const [x,b,z,t]=boardPoint(u,v); rt.push([x,t,z]); rb.push([x,b,z]);
+      ut.push([0.5-x/(2*BOARD.halfW),0.5+z/(2*BOARD.halfL)]); ub.push([0.5+x/(2*BOARD.halfW),0.5+z/(2*BOARD.halfL)]); }
+    top.push(rt); bot.push(rb); uvTop.push(ut); uvBot.push(ub); }
+  // the rail: round the edge of the grid, deck edge to base edge, bulging a touch outward
+  const ring=[];
+  for(let j=0;j<=NU;j++)ring.push([0,j]); for(let i=1;i<=NV;i++)ring.push([i,NU]); for(let j=NU-1;j>=0;j--)ring.push([NV,j]); for(let i=NV-1;i>=1;i--)ring.push([i,0]);
+  const rail=[], uvR=[], n=ring.length;
+  for(let k=0;k<=n;k++){
+    const [i,j]=ring[k%n], [ia,ja]=ring[(k+n-1)%n], [ib,jb]=ring[(k+1)%n], t=top[i][j], b=bot[i][j];
+    let ox=top[ib][jb][2]-top[ia][ja][2], oz=-(top[ib][jb][0]-top[ia][ja][0]); const ol=Math.hypot(ox,oz)||1; ox/=ol; oz/=ol;
+    if(ox*t[0]+oz*t[2]<0){ox=-ox; oz=-oz;}
+    const d=t[1]-b[1];
+    rail.push([t,[t[0]+ox*0.0012,t[1]-d*0.3,t[2]+oz*0.0012],[b[0]+ox*0.0012,b[1]+d*0.3,b[2]+oz*0.0012],b]); uvR.push([[k/n,0],[k/n,0.3],[k/n,0.7],[k/n,1]]);
+  }
+  // the rail faces outward: check it on the +x rail, halfway along
+  let railG=ladderGeo(rail,uvR,false); const k=NU+NV/2;
+  if(railG.attributes.normal.getX(k*4+1)<0){ railG.dispose(); railG=ladderGeo(rail,uvR,true); }
+  return {top:ladderFacing(top,uvTop,[0,1,0]), base:ladderFacing(bot,uvBot,[0,-1,0]), rail:railG};
+}
+// a fin under each tip, swept toward the tip it sits under, and a binding plate (black, neon edge) under each boot
+function finGeo(dir){
+  const s=new THREE.Shape(); s.moveTo(-0.04,0); s.lineTo(0.034,0); s.quadraticCurveTo(0.03,-0.012,0.022,-0.022); s.quadraticCurveTo(0.012,-0.027,0.004,-0.022); s.closePath();
+  const g=new THREE.ExtrudeGeometry(s,{depth:0.004,bevelEnabled:true,bevelThickness:0.0012,bevelSize:0.0012,bevelSegments:2,curveSegments:8});
+  g.translate(0,0,-0.002); g.rotateY(dir>0?-Math.PI/2:Math.PI/2); return g;
+}
+function plateGeo(){
+  const L=0.33, W=0.13, r=0.05, T=BOARD.plate+0.001, s=new THREE.Shape(); s.moveTo(-L/2+r,-W/2); s.lineTo(L/2-r,-W/2); s.quadraticCurveTo(L/2,-W/2,L/2,-W/2+r); s.lineTo(L/2,W/2-r); s.quadraticCurveTo(L/2,W/2,L/2-r,W/2);
+  s.lineTo(-L/2+r,W/2); s.quadraticCurveTo(-L/2,W/2,-L/2,W/2-r); s.lineTo(-L/2,-W/2+r); s.quadraticCurveTo(-L/2,-W/2,-L/2+r,-W/2);
+  const g=new THREE.ExtrudeGeometry(s,{depth:T-0.003,bevelEnabled:true,bevelThickness:0.0015,bevelSize:0.0015,bevelSegments:1,curveSegments:10});
+  g.rotateX(-Math.PI/2); g.translate(0,0.0015,0); return g; // lying flat, bottom face on y=0, a millimetre into the deck
+}
+
 // ---------- rider ----------
 const rider=new THREE.Group(); scene.add(rider);
 const RM={
@@ -1277,24 +1382,30 @@ const RM={
   vest:mat(0xe63946,{roughness:0.8,map:noiseTex(64,210,60,70,28,3)}),
   shorts:mat(0x1d2d44,{roughness:0.85,map:noiseTex(64,34,48,70,22,5)}),
   hair:mat(0x2b1d14,{roughness:0.9}),
-  boardTop:new THREE.MeshPhysicalMaterial({map:boardTex(),roughness:0.32,metalness:0,clearcoat:0.7,clearcoatRoughness:0.12}),
-  boardBase:new THREE.MeshPhysicalMaterial({color:0xf1f1f1,roughness:0.25,metalness:0,clearcoat:0.8,clearcoatRoughness:0.06}),
+  boardTop:new THREE.MeshPhysicalMaterial({map:texOf(canvasOf(512,1690)),roughness:0.32,metalness:0,clearcoat:0.7,clearcoatRoughness:0.12}),
+  boardBase:new THREE.MeshPhysicalMaterial({map:texOf(canvasOf(512,1690)),roughness:0.25,metalness:0,clearcoat:0.8,clearcoatRoughness:0.06}),
+  boardRail:new THREE.MeshPhysicalMaterial({color:0x111317,roughness:0.3,metalness:0,clearcoat:0.8,clearcoatRoughness:0.08}),
+  plate:new THREE.MeshPhysicalMaterial({color:0x141518,roughness:0.75,metalness:0,sheen:0.3,sheenRoughness:0.6}),
+  plateEdge:new THREE.MeshStandardMaterial({color:0x8fe31a,roughness:0.5}),
   bind:mat(0x2a2a2e,{roughness:0.6}),
   accent:mat(0x00b298,{roughness:0.45})
 };
 const P={}; // parts
 {
-  const rr=(w,h,r)=>{const s=new THREE.Shape();s.moveTo(-w/2+r,-h/2);s.lineTo(w/2-r,-h/2);s.quadraticCurveTo(w/2,-h/2,w/2,-h/2+r);s.lineTo(w/2,h/2-r);s.quadraticCurveTo(w/2,h/2,w/2-r,h/2);s.lineTo(-w/2+r,h/2);s.quadraticCurveTo(-w/2,h/2,-w/2,h/2-r);s.lineTo(-w/2,-h/2+r);s.quadraticCurveTo(-w/2,-h/2,-w/2+r,-h/2);return s;};
-  const board=new THREE.Mesh(rocker(new THREE.ExtrudeGeometry(rr(0.42,1.40,0.17),{depth:0.028,bevelEnabled:true,bevelThickness:0.006,bevelSize:0.006,bevelSegments:2,curveSegments:16}),0.05,0.7),RM.boardBase);
-  board.rotation.x=-Math.PI/2; rider.add(board);
-  const top=new THREE.Mesh(rocker(new THREE.ExtrudeGeometry(rr(0.40,1.36,0.16),{depth:0.012,bevelEnabled:false,curveSegments:16}),0.05,0.68),RM.boardTop); top.rotation.x=-Math.PI/2; top.position.y=0.028; rider.add(top);
-  P.bindings=[];
+  const bg=boardGeos();
+  rider.add(new THREE.Mesh(bg.top,RM.boardTop),new THREE.Mesh(bg.base,RM.boardBase),new THREE.Mesh(bg.rail,RM.boardRail));
+  const paintBoard=()=>{ paintBoardTop(RM.boardTop.map.image); paintBoardBase(RM.boardBase.map.image); RM.boardTop.map.needsUpdate=RM.boardBase.map.needsUpdate=true; };
+  paintBoard(); if(!lobsterOk())LOBSTER_IMG.addEventListener('load',paintBoard);
+  for(const z of [0.585,-0.585]){ const fin=new THREE.Mesh(finGeo(z),RM.boardRail); fin.position.set(0,boardRocker(z)+0.001,z); fin.rotation.x=-Math.atan(2*BOARD.rocker*z/BOARD.halfL**2); rider.add(fin); }
+  // binding plates under the boots; the skinned model stands its soles on them (setupRig)
+  P.bindings=[]; const plate=plateGeo();
   for(const z of [0.26,-0.26]){
+    const deck=boardDeckY(z), pl=new THREE.Mesh(plate,[RM.plate,RM.plateEdge]); pl.position.set(0,deck-0.001,z);
+    pl.rotation.set(-Math.atan(2*BOARD.rocker*z/BOARD.halfL**2),(z>0?1:-1)*12*DEG,0,'YXZ'); rider.add(pl);
     const b=new THREE.Mesh(new THREE.BoxGeometry(0.30,0.1,0.24),RM.bind);b.position.set(0,0.09,z);b.rotation.y=(z>0?1:-1)*12*DEG;rider.add(b);
     const liner=new THREE.Mesh(new THREE.BoxGeometry(0.24,0.05,0.16),RM.accent);liner.position.set(0,0.165,z);liner.rotation.y=b.rotation.y;rider.add(liner);
     P.bindings.push(b,liner);
   }
-  for(const z of [0.62,-0.62]){const fin=new THREE.Mesh(new THREE.BoxGeometry(0.02,0.04,0.12),RM.bind);fin.position.set(0,-0.02,z);rider.add(fin);}
   P.pelvis=new THREE.Mesh(new THREE.CylinderGeometry(0.135,0.125,0.2,14),RM.shorts); rider.add(P.pelvis);
   P.torso=limbMesh(0.145,RM.skin); rider.add(P.torso);
   P.vest=new THREE.Mesh(new THREE.CylinderGeometry(0.175,0.15,1,16),RM.vest); rider.add(P.vest);
@@ -1473,7 +1584,7 @@ function setupRig(gltf){
   }
   // stand the model in the bindings: its own leg length, ankles at sole height on the board, feet centred across it
   const ankleH=info.ankleHeight||0.08, toe=info.toeReach||0.17, heel=info.heelReach||0.06;
-  LEG=(R.leg1+R.leg2)/2; BOARD_C.y=0.04+0.026+ankleH;
+  LEG=(R.leg1+R.leg2)/2; BOARD_C.y=boardDeckY(0.26)+BOARD.plate+(info.soleDepth||0.032)+ankleH; // boots' soles on the plates
   for(const [foot,sz,key] of [[J.footF,1,'toesF'],[J.footB,-1,'toesB']]){
     R[key]=V3(FACING*Math.cos(12*DEG),0,sz*Math.sin(12*DEG)); // duck stance: front toes angled to the nose, back toes to the tail
     foot.set(0,BOARD_C.y,0.26*sz).addScaledVector(R[key],-(toe-heel)/2);
@@ -1491,6 +1602,7 @@ const RIDER_MAT={
   skin:  {sheen:0.3,sheenRoughness:0.5,sheenColor:[0.85,0.42,0.32],clearcoat:0.04,clearcoatRoughness:0.35, wet:{roughness:0.26,clearcoat:0.5,dark:0.86}},
   vest:  {sheen:0.6,sheenRoughness:0.7,sheenColor:[0.32,0.32,0.34], wet:{roughness:0.4,sheen:0.15,dark:0.62}},
   shorts:{sheen:0.5,sheenRoughness:0.6,sheenColor:[0.3,0.3,0.32], wet:{roughness:0.42,sheen:0.12,dark:0.6}},
+  strap: {sheen:0.4,sheenRoughness:0.6,sheenColor:[0.22,0.22,0.24], wet:{roughness:0.45,sheen:0.1,dark:0.8}},
   helmet:{clearcoat:1,clearcoatRoughness:0.1}, frame:{clearcoat:0.6,clearcoatRoughness:0.15}, lens:{clearcoat:1,clearcoatRoughness:0.02}, boots:{}
 };
 function riderMaterial(o){
@@ -2444,6 +2556,7 @@ function frame(now){
   // scrolling world
   const sp=WATER_SP; waterNear.position.set(Math.round(camera.position.x/sp)*sp,0,Math.round((camera.position.z+62)/sp)*sp);
   waterFar.position.set(camera.position.x,-0.02,camera.position.z);
+  waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x,waterNear.position.z,Math.round(140/sp)*sp/2-1,Math.round(230/sp)*sp/2-1);
   sky.position.copy(camera.position); hills.position.set(camera.position.x,0,camera.position.z);
   shore.position.z=Math.round(camera.position.z/LAND_P)*LAND_P;
   skyUniforms.uTime.value=simTime;
