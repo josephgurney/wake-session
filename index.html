@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Thursday Yacht Club</title>
+<title>Lobster presents: Thursday Yacht Club</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&family=DM+Sans:wght@400;500&display=swap">
 <style>
@@ -44,6 +44,8 @@ body{padding:0}
 #start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(5,18,28,.35),rgba(5,18,28,.86));pointer-events:auto;transition:opacity .5s;overflow-y:auto;touch-action:pan-y;padding:12px 0;box-sizing:border-box}
 #start.hide{opacity:0;pointer-events:none}
 .card{margin:auto;max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:28px 30px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.card .presents{font-family:var(--display);font-weight:700;font-size:clamp(14px,2.4vw,18px);letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 10px}
+.card .presents b{font-weight:800;color:var(--ink)}
 .card h1{font-family:var(--display);font-weight:800;font-size:clamp(44px,9vw,84px);line-height:.92;margin:0;letter-spacing:.01em;text-transform:uppercase}
 .card h1 em{font-style:normal;color:var(--accent);white-space:nowrap}
 .card p{margin:12px 0 0;color:var(--ink-dim);line-height:1.55;max-width:60ch}
@@ -129,6 +131,7 @@ body.touch .card .grid.tc{display:grid}
   <div id="fade"></div>
   <div id="start">
     <div class="card">
+      <div class="presents"><b>Lobster</b> presents</div>
       <h1>Thursday <em>Yacht Club</em></h1>
       <p>Boat is set at 21 mph on a 65 ft line. Cut out wide, then edge hard back into the wake. Hold <kbd>Space</kbd> on the way in to load the line and let go at the lip to pop. Clear both wakes for the wake-to-wake bonus. Rotation is set at the lip: tap a direction for a 180, hold it longer to wind up more, then keep pushing to tuck and turn faster or push back to open up and slow down. Over- or under-rotate and you catch an edge.</p>
       <div class="grid kb">
