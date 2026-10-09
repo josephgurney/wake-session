@@ -263,6 +263,7 @@ body.touch .card .grid.tc{display:grid}
 </dialog>
 
 <script src="assets/rider.js"></script>
+<script src="assets/lobster-wordmark.js"></script>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/" } }
@@ -792,87 +793,480 @@ function boardTex(){
 function rocker(geo,amt,halfLen){ const p=geo.attributes.position; for(let i=0;i<p.count;i++){ const y=p.getY(i); p.setZ(i,p.getZ(i)+amt*Math.pow(y/halfLen,2)); } geo.computeVertexNormals(); return geo; }
 
 // ---------- boat ----------
-function hullShape(scale,bowZ,sternZ,halfW){
-  const s=new THREE.Shape();
-  s.moveTo(0,bowZ);
-  s.bezierCurveTo(halfW*0.55,bowZ*0.85, halfW,bowZ*0.3, halfW,0);
-  s.lineTo(halfW*0.98,sternZ*0.85);
-  s.bezierCurveTo(halfW*0.9,sternZ, halfW*0.3,sternZ, 0,sternZ);
-  s.bezierCurveTo(-halfW*0.3,sternZ, -halfW*0.9,sternZ, -halfW*0.98,sternZ*0.85);
-  s.lineTo(-halfW,0);
-  s.bezierCurveTo(-halfW,bowZ*0.3, -halfW*0.55,bowZ*0.85, 0,bowZ);
-  return s;
+// A 21 ft open-bow wake boat after the 2008 Yamaha 212X, in Lobster livery. Boat frame: +z is the bow, +x is port and
+// y=0 the static waterline. The transom sits at z=-STERN_OFF (where the wake starts) and the tow ball at
+// (0,PYLON_H,PYLON_Z). Both are physics constants, so the boat is built around them rather than the other way round.
+// Everything static is baked into one mesh per material; the crew (see below) are separate skinned figures.
+const BOW_Z=3.2, BOAT_L=BOW_Z+STERN_OFF, HY0=-0.45, HY1=1.15;
+const boatU=z=>(z+STERN_OFF)/BOAT_L;
+// hull lines: half-beam at the rubbing strake, sheer, keel (deep-V that sweeps up into a raked stem), deadrise
+function halfBeam(z){const u=boatU(z); if(u<0.5)return 1.22+0.07*Math.sin(Math.min(1,u/0.42)*Math.PI/2); return 1.29*Math.pow(Math.max(0,1-Math.pow((u-0.5)/0.5,2.0)),0.66);}
+const gunwaleX=z=>halfBeam(z)*(1-0.10/1.29);
+function sheerY(z){const u=boatU(z); return 0.80+0.05*u+0.17*u*u*u;}
+function keelY(z){const u=boatU(z); if(u<0.62)return -0.30-0.06*Math.sin(Math.min(1,u/0.6)*Math.PI/2); return lerp(-0.36,sheerY(z)-0.03,Math.pow((u-0.62)/0.38,2.2));}
+const deadrise=z=>{const u=boatU(z); return (20+4*u+18*Math.pow(Math.max(0,u-0.5)/0.5,1.5))*DEG;};
+// where the black bottom paint stops; it sweeps down into the forefoot at the bow
+function paintY(z){const u=boatU(z); return u<0.72?0.32+0.05*u:lerp(0.356,0,Math.pow((u-0.72)/0.28,1.3));}
+function deckY(x,z){const c=gunwaleX(z), q=c>1e-3?x/c:0; return sheerY(z)+0.035*Math.max(0,1-q*q)*Math.min(1,c/0.4);}
+// one half-section, keel to the top of the rounded gunwale: V bottom, reverse chine, flared topside, strake, tumblehome.
+// Toward the bow the chine tucks in, so the topsides flare out over a finer entry.
+function hullSection(z){
+  const hb=halfBeam(z), ys=sheerY(z), yk=keelY(z), sc=hb/1.29, H=Math.max(0,ys-yk), k=Math.min(1,H/1.15);
+  const cb=(0.80-0.24*smoothstep(0.5,0.95,boatU(z)))*hb, yc=yk+Math.min(cb*Math.tan(deadrise(z)),0.45*H), yb=ys-Math.min(0.27,0.36*H);
+  const sx=s=>lerp(cb+0.06*sc,hb-0.012*sc,s)+0.012*sc*Math.sin(s*Math.PI), sy=s=>lerp(yc,yb-0.035*k,s);
+  return [[0,yk],[0.33*cb,yk+(yc-yk)*0.32],[0.66*cb,yk+(yc-yk)*0.65],[cb,yc],[cb+0.06*sc,yc+0.006*k],
+    [sx(0.33),sy(0.33)],[sx(0.66),sy(0.66)],[hb-0.012*sc,yb-0.035*k],[hb,yb-0.018*k],[hb+0.004*sc,yb+0.012*k],
+    [hb-0.004*sc,yb+0.035*k],[hb-0.02*sc,yb+0.05*k],[hb-0.034*sc,ys-0.10*k],[hb-0.052*sc,ys-0.045*k],
+    [hb-0.075*sc,ys-0.013*k],[gunwaleX(z),ys]];
 }
-// The boat's name across the transom, as a ribbon that follows the curve of the hull (found by raycasting it, so
-// the lettering sits a few millimetres proud of the gelcoat wherever the hull shape goes).
-function transomName(hull,text){
-  const c=document.createElement('canvas'); c.width=1024; c.height=160; const x=c.getContext('2d');
-  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
-  const draw=()=>{ x.clearRect(0,0,1024,160); x.textAlign='center'; x.textBaseline='middle';
-    x.font='800 124px "Barlow Condensed","Arial Narrow",Impact,sans-serif'; x.fillStyle='#1f1b48'; x.fillText(text,512,68,980);
-    x.fillStyle='#e6007e'; x.beginPath(); x.moveTo(150,140); x.quadraticCurveTo(512,110,874,140); x.quadraticCurveTo(512,126,150,140); x.fill();
-    t.needsUpdate=true; };
-  draw(); if(document.fonts&&document.fonts.load)document.fonts.load('800 124px "Barlow Condensed"').then(draw,()=>{});
-  const rc=new THREE.Raycaster(), N=24, X=0.86, y0=0.2, y1=0.47, pos=[], uv=[], idx=[];
-  hull.updateMatrixWorld();
-  for(let i=0;i<=N;i++){
-    const px=X-2*X*i/N; rc.set(V3(px,0.33,-10),V3(0,0,1)); const h=rc.intersectObject(hull); const pz=(h.length?h[0].point.z:-3.48)-0.006;
-    pos.push(px,y0,pz, px,y1,pz); uv.push(i/N,0, i/N,1); if(i<N){ const a=i*2; idx.push(a,a+2,a+1, a+1,a+2,a+3); }
+// cockpit: one opening from the rear bench to the bow seats, walk-through between the consoles
+const CK0=-2.45, CK1=2.5, CK_R=0.26, GUN_W=0.24;
+const ckFull=z=>gunwaleX(z)-GUN_W;
+function ckHalf(z){
+  if(z<CK0||z>CK1)return 0;
+  const full=ckFull(z), rb=ckFull(CK1), dr=z-CK0, db=CK1-z; let w=full;
+  if(dr<CK_R)w=Math.min(w,full-CK_R+Math.sqrt(Math.max(0,CK_R*CK_R-(CK_R-dr)*(CK_R-dr))));
+  if(db<rb)w=Math.min(w,full-rb+Math.sqrt(Math.max(0,rb*rb-(rb-db)*(rb-db))));
+  return Math.max(0,w);
+}
+const floorY=z=>0.22+0.24*smoothstep(1.3,2.5,z);
+// the bow footwell narrows so the floor never pokes out through the V of the hull
+function floorHalf(z){const e=ckHalf(z); if(e<=0)return 0; return clamp(Math.min(e-0.05,(floorY(z)-0.07-keelY(z))/Math.tan(deadrise(z))),0,e);}
+const HULL_ST=(()=>{const s=[]; for(let i=0;i<=72;i++)s.push(-STERN_OFF+BOAT_L*(1-Math.pow(1-i/72,1.5)));
+  for(let i=0;i<=8;i++)s.push(CK0+CK_R*(1-Math.cos(i/8*Math.PI/2)));
+  const rb=ckFull(CK1); for(let i=0;i<=10;i++)s.push(CK1-rb*(1-Math.cos(i/10*Math.PI/2)));
+  s.push(CK0-0.002); for(let z=CK0;z<CK1;z+=0.12)s.push(z);
+  s.sort((a,b)=>a-b); return s.filter((z,i)=>i===0||z-s[i-1]>2e-4);})();
+
+// geometry helpers: a quad ladder from a grid of points, a rounded box with exact normals, matrix shorthands, and a
+// baker that merges everything sharing a material into one mesh
+function ladderGeo(P,U,flip){
+  const ni=P.length, nj=P[0].length, pos=new Float32Array(ni*nj*3), uv=new Float32Array(ni*nj*2), idx=[];
+  for(let i=0;i<ni;i++)for(let j=0;j<nj;j++){const k=i*nj+j,p=P[i][j]; pos[k*3]=p[0];pos[k*3+1]=p[1];pos[k*3+2]=p[2]; if(U){uv[k*2]=U[i][j][0];uv[k*2+1]=U[i][j][1];}}
+  for(let i=0;i<ni-1;i++)for(let j=0;j<nj-1;j++){const a=i*nj+j,b=a+1,c=a+nj,d=c+1; if(flip)idx.push(a,c,b,b,c,d); else idx.push(a,b,c,b,d,c);}
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('uv',new THREE.BufferAttribute(uv,2)); g.setIndex(idx); g.computeVertexNormals(); return g;
+}
+function rbox(w,h,d,r,k=2){
+  r=Math.max(1e-4,Math.min(r,w/2,h/2,d/2)*0.999); const n=2*k+2, g=new THREE.BoxGeometry(1,1,1,n,n,n), p=g.attributes.position, nm=g.attributes.normal, v=V3(), c=V3();
+  const q=(a,half)=>{const i=Math.round((a+0.5)*n); return i<=k?-half+r*i/k:i>=n-k?half-r*(n-i)/k:lerp(-half+r,half-r,(i-k)/(n-2*k));};
+  for(let i=0;i<p.count;i++){
+    v.set(q(p.getX(i),w/2),q(p.getY(i),h/2),q(p.getZ(i),d/2)); c.set(clamp(v.x,-w/2+r,w/2-r),clamp(v.y,-h/2+r,h/2-r),clamp(v.z,-d/2+r,d/2-r));
+    v.sub(c).normalize(); nm.setXYZ(i,v.x,v.y,v.z); v.multiplyScalar(r).add(c); p.setXYZ(i,v.x,v.y,v.z);
   }
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2)); g.setIndex(idx); g.computeVertexNormals();
-  return new THREE.Mesh(g,new THREE.MeshStandardMaterial({map:t,transparent:true,depthWrite:false,roughness:0.2,metalness:0}));
+  return g;
 }
+const _eu=new THREE.Euler();
+const TRS=(x,y,z,rx=0,ry=0,rz=0,s=1)=>{const S=Array.isArray(s)?V3(s[0],s[1],s[2]):V3(s,s,s); return new THREE.Matrix4().compose(V3(x,y,z),new THREE.Quaternion().setFromEuler(_eu.set(rx,ry,rz)),S);};
+const basisM=(p,X,Y,Z,sx=1,sy=1,sz=1)=>new THREE.Matrix4().makeBasis(V3().copy(X).multiplyScalar(sx),V3().copy(Y).multiplyScalar(sy),V3().copy(Z).multiplyScalar(sz)).setPosition(p);
+const segM=(a,b,k=1)=>{const d=V3().subVectors(b,a), L=d.length()||1e-4; return new THREE.Matrix4().compose(V3().addVectors(a,b).multiplyScalar(0.5),new THREE.Quaternion().setFromUnitVectors(UP,d.multiplyScalar(1/L)),V3(k,L,k));};
+const tubeGeo=(pts,r,closed=false,seg=40,rad=10)=>new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts,closed),seg,r,rad,closed);
+const cylGeoY=(r,r2=r,seg=12)=>new THREE.CylinderGeometry(r,r2,1,seg);
+function mergeBaked(list){
+  let nv=0,ni=0; for(const g of list){nv+=g.attributes.position.count; ni+=g.index?g.index.count:g.attributes.position.count;}
+  const pos=new Float32Array(nv*3), nor=new Float32Array(nv*3), uv=new Float32Array(nv*2), idx=new Uint32Array(ni); let vo=0,io=0;
+  for(const g of list){
+    if(!g.attributes.normal)g.computeVertexNormals(); const c=g.attributes.position.count;
+    pos.set(g.attributes.position.array,vo*3); nor.set(g.attributes.normal.array,vo*3); if(g.attributes.uv)uv.set(g.attributes.uv.array,vo*2);
+    if(g.index){const a=g.index.array; for(let k=0;k<a.length;k++)idx[io+k]=a[k]+vo; io+=a.length;} else {for(let k=0;k<c;k++)idx[io+k]=vo+k; io+=c;}
+    vo+=c;
+  }
+  const m=new THREE.BufferGeometry(); m.setAttribute('position',new THREE.BufferAttribute(pos,3)); m.setAttribute('normal',new THREE.BufferAttribute(nor,3)); m.setAttribute('uv',new THREE.BufferAttribute(uv,2)); m.setIndex(new THREE.BufferAttribute(idx,1)); m.computeBoundingSphere(); return m;
+}
+class Bake{
+  constructor(){this.m=new Map();}
+  add(g,mt,mx){if(mx)g.applyMatrix4(mx); if(!this.m.has(mt))this.m.set(mt,[]); this.m.get(mt).push(g); return g;}
+  build(parent){for(const [mt,list] of this.m){const me=new THREE.Mesh(mergeBaked(list),mt); me.castShadow=!mt.transparent; me.receiveShadow=true; parent.add(me);} this.m.clear();}
+}
+
+// ---------- livery: Lobster colours, painted onto canvases for the hull sides, transom and bimini valance ----------
+const LOBSTER_IMG=new Image(); if(window.LOBSTER_WORDMARK)LOBSTER_IMG.src=window.LOBSTER_WORDMARK; // a data URL (assets/lobster-wordmark.js), so the canvas stays untainted off disk
+const lobsterOk=()=>LOBSTER_IMG.complete&&LOBSTER_IMG.naturalWidth>0;
+const LOB={navy:'#1f1b48',pink:'#e6007e',yellow:'#ffed00',gel:'#f3f3ef',black:'#0b0c0e'};
+const canvasOf=(w,h)=>{const c=document.createElement('canvas'); c.width=w; c.height=h; return c;};
+const texOf=c=>{const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8; return t;};
+// a cracked double slash on the black, standing in for the 212X's big X
+function clawX(x,px,py,ppm){
+  [[-2.95,0.05,-1.0,0.30],[-2.85,0.30,-0.95,0.04]].forEach(([z0,y0,z1,y1],k)=>{
+    const rnd=mulberry32(11+k), ax=px(z0), ay=py(y0), dx=px(z1)-ax, dy=py(y1)-ay, L=Math.hypot(dx,dy), nx=-dy/L, ny=dx/L, hw=0.055*ppm, n=20, top=[], bot=[];
+    for(let i=0;i<=n;i++){const t=i/n, w=hw*Math.pow(Math.sin(Math.PI*(0.06+0.88*t)),0.45)*(1-0.3*t), a=1+(rnd()-0.5)*0.4, b=1+(rnd()-0.5)*0.4, cx=ax+dx*t, cy=ay+dy*t;
+      top.push([cx+nx*w*a,cy+ny*w*a]); bot.push([cx-nx*w*b,cy-ny*w*b]);}
+    x.beginPath(); top.forEach((p,i)=>i?x.lineTo(p[0],p[1]):x.moveTo(p[0],p[1])); for(let i=n;i>=0;i--)x.lineTo(bot[i][0],bot[i][1]); x.closePath();
+    x.fillStyle=LOB.pink; x.fill(); x.lineWidth=0.007*ppm; x.strokeStyle=LOB.yellow; x.stroke();
+    x.beginPath(); for(let i=0;i<=5;i++){const t=0.42+i*0.025, o=(i%2?0.45:-0.45)*hw*(i===0||i===5?2.2:1), cx=ax+dx*t+nx*o, cy=ay+dy*t+ny*o; i?x.lineTo(cx,cy):x.moveTo(cx,cy);}
+    x.lineWidth=0.012*ppm; x.strokeStyle=LOB.black; x.stroke();
+  });
+}
+const hullCanvas=canvasOf(4096,512), transomCanvas=canvasOf(1024,640), valanceCanvas=canvasOf(1024,64);
+function paintHull(){
+  const c=hullCanvas, x=c.getContext('2d'), W=c.width, H=c.height, ppm=H/(HY1-HY0), py=y=>(1-(y-HY0)/(HY1-HY0))*H;
+  for(const side of [-1,1]){ // left half is starboard (bow to the right), right half is port (bow to the left)
+    const px=z=>side<0?boatU(z)*W/2:W/2+(1-boatU(z))*W/2;
+    const line=off=>{x.beginPath(); for(let i=0;i<=90;i++){const z=-STERN_OFF+BOAT_L*i/90, X=px(z), Y=py(paintY(z)+off); i?x.lineTo(X,Y):x.moveTo(X,Y);}};
+    x.save(); x.beginPath(); x.rect(side<0?0:W/2,0,W/2,H); x.clip();
+    x.fillStyle=LOB.gel; x.fillRect(0,0,W,H);
+    line(0); x.lineTo(px(BOW_Z),H); x.lineTo(px(-STERN_OFF),H); x.closePath(); x.fillStyle=LOB.black; x.fill();
+    x.lineWidth=0.014*ppm; x.strokeStyle=LOB.pink; line(0.026); x.stroke();
+    x.lineWidth=0.007*ppm; x.strokeStyle=LOB.yellow; line(0.05); x.stroke();
+    clawX(x,px,py,ppm);
+    if(lobsterOk()){const h=0.14*ppm, w=h*LOBSTER_IMG.naturalWidth/LOBSTER_IMG.naturalHeight; x.drawImage(LOBSTER_IMG,px(0.62)-w/2,py(0.49)-h/2,w,h);}
+    x.fillStyle=LOB.navy; x.font=`800 ${Math.round(0.062*ppm)}px "Barlow Condensed","Arial Narrow",sans-serif`; x.textBaseline='middle'; x.textAlign=side<0?'right':'left';
+    x.fillText('SUNGLASSES WITH BITE.',px(2.3),py(0.49));
+    x.restore();
+  }
+}
+const BOAT_NAME='DJ POORLY P';
+function paintTransom(){ // the boat's name across the stern, where the rider reads it all session
+  const c=transomCanvas, x=c.getContext('2d'), W=c.width, H=c.height, ppm=H/(HY1-HY0), py=y=>(1-(y-HY0)/(HY1-HY0))*H, pl=paintY(-STERN_OFF);
+  x.fillStyle=LOB.gel; x.fillRect(0,0,W,H); x.fillStyle=LOB.black; x.fillRect(0,py(pl),W,H);
+  x.fillStyle=LOB.pink; x.fillRect(0,py(pl+0.033),W,0.014*ppm); x.fillStyle=LOB.yellow; x.fillRect(0,py(pl+0.0535),W,0.007*ppm);
+  x.textAlign='center'; x.textBaseline='middle'; x.fillStyle=LOB.navy; x.font=`800 ${Math.round(0.2*ppm)}px "Barlow Condensed","Arial Narrow",Impact,sans-serif`;
+  x.fillText(BOAT_NAME,W/2,py(0.6),1.6*ppm);
+  const y=py(0.475), w=0.8*ppm; x.fillStyle=LOB.pink; x.beginPath(); x.moveTo(W/2-w,y); x.quadraticCurveTo(W/2,y-0.05*ppm,W/2+w,y); x.quadraticCurveTo(W/2,y-0.022*ppm,W/2-w,y); x.fill();
+}
+function paintValance(){
+  const c=valanceCanvas, x=c.getContext('2d'); x.fillStyle=LOB.navy; x.fillRect(0,0,c.width,c.height);
+  if(lobsterOk()){const h=c.height*0.8, w=h*LOBSTER_IMG.naturalWidth/LOBSTER_IMG.naturalHeight; x.drawImage(LOBSTER_IMG,(c.width-w)/2,(c.height-h)/2,w,h);}
+}
+const phys=(color,o={})=>new THREE.MeshPhysicalMaterial(Object.assign({color,roughness:0.32,metalness:0,clearcoat:1,clearcoatRoughness:0.06},o)); // gelcoat
+const BM={ // boat materials
+  hull:phys(0xffffff,{map:texOf(hullCanvas)}), transom:phys(0xffffff,{map:texOf(transomCanvas)}), gel:phys(0xf3f3ef),
+  liner:mat(0xe6e2d8,{roughness:0.5}), carpet:mat(0x4b4f55,{roughness:1}), vinyl:mat(0xeee6d4,{roughness:0.6}), vinylDark:mat(0x484b51,{roughness:0.55}),
+  dash:mat(0x1c1f23,{roughness:0.7}), alu:mat(0xd3d7dc,{roughness:0.24,metalness:1}), chrome:mat(0xf4f4f4,{roughness:0.06,metalness:1}),
+  gloss:phys(0x0d0e11,{roughness:0.28}), rubber:mat(0x17181b,{roughness:0.85}), grille:mat(0x1d1f23,{roughness:0.95}),
+  canvas:mat(0x1f1b48,{roughness:0.95,side:THREE.DoubleSide}), valance:mat(0xffffff,{roughness:0.95,side:THREE.DoubleSide,map:texOf(valanceCanvas)}),
+  glass:new THREE.MeshStandardMaterial({color:new THREE.Color(0.05,0.07,0.08),transparent:true,opacity:0.72,roughness:0.03,metalness:0.5,side:THREE.DoubleSide,depthWrite:false}),
+  nonskid:mat(0x2e3135,{roughness:1}), platform:mat(0x6a6e74,{roughness:1}),
+  navRed:new THREE.MeshStandardMaterial({color:new THREE.Color(1,0.05,0.04),emissive:new THREE.Color(1.5,0.05,0.03)}),
+  navGreen:new THREE.MeshStandardMaterial({color:new THREE.Color(0.05,1,0.2),emissive:new THREE.Color(0.05,1.3,0.25)})
+};
+{ const grain=noiseTex(128,236,236,236,26,9); BM.carpet.map=grain; BM.nonskid.map=grain; BM.platform.map=grain; BM.vinyl.map=noiseTex(64,240,240,240,10,21); BM.vinylDark.map=BM.vinyl.map; BM.canvas.map=noiseTex(64,240,240,240,22,33); }
+function repaintLivery(){ paintHull(); paintTransom(); paintValance(); for(const m of [BM.hull,BM.transom,BM.valance])m.map.needsUpdate=true; }
+repaintLivery();
+Promise.all([new Promise(r=>{if(lobsterOk())r(); else {LOBSTER_IMG.onload=r; LOBSTER_IMG.onerror=r;}}),
+  document.fonts&&document.fonts.load?document.fonts.load('800 64px "Barlow Condensed"').catch(()=>{}):null]).then(repaintLivery);
+
 // LED rings on the tower speakers: glow while Poorly P's set is playing (HDR, so the bloom picks them up)
 const djLed=new THREE.MeshBasicMaterial({color:0x000000});
 const boat=new THREE.Group();
 {
-  const white=mat(0xf4f3ee,{roughness:0.18}); const navy=mat(0x1b2f4e,{roughness:0.22}); const grey=mat(0xb9bdc2,{roughness:0.8}); const dark=mat(0x16181c,{roughness:0.35,metalness:0.6});
-  const hull=new THREE.Mesh(new THREE.ExtrudeGeometry(hullShape(1,3.4,-3.3,1.25),{depth:1.05,bevelEnabled:true,bevelThickness:0.25,bevelSize:0.18,bevelSegments:4}),white);
-  hull.rotation.x=Math.PI/2; hull.position.y=0.5; boat.add(hull);
-  const stripe=new THREE.Mesh(new THREE.ExtrudeGeometry(hullShape(1,3.42,-3.32,1.27),{depth:0.14,bevelEnabled:false}),navy);
-  stripe.rotation.x=Math.PI/2; stripe.position.y=0.3; boat.add(stripe);
-  const rub=new THREE.Mesh(new THREE.ExtrudeGeometry(hullShape(1,3.43,-3.33,1.28),{depth:0.05,bevelEnabled:false}),dark);
-  rub.rotation.x=Math.PI/2; rub.position.y=0.62; boat.add(rub);
-  const deck=new THREE.Mesh(new THREE.ExtrudeGeometry(hullShape(1,3.2,-3.2,1.17),{depth:0.06,bevelEnabled:false}),grey);
-  deck.rotation.x=Math.PI/2; deck.position.y=0.56; boat.add(deck);
-  const cockpit=new THREE.Mesh(new THREE.BoxGeometry(1.7,0.5,3.0),mat(0x222a33,{roughness:0.9})); cockpit.position.set(0,0.25,-0.3); boat.add(cockpit);
-  const seatMat=mat(0xd8d2c4,{roughness:0.85});
-  const pad=new THREE.Mesh(new THREE.BoxGeometry(2.1,0.22,1.5),seatMat); pad.position.set(0,0.64,-2.45); boat.add(pad);
-  for(const sx of [-1,1]){ const seat=new THREE.Mesh(new THREE.BoxGeometry(0.55,0.5,0.55),seatMat); seat.position.set(sx*0.62,0.5,0.75); boat.add(seat); }
-  const bench=new THREE.Mesh(new THREE.BoxGeometry(1.9,0.4,0.5),seatMat); bench.position.set(0,0.48,-1.45); boat.add(bench);
-  const swim=new THREE.Mesh(new THREE.BoxGeometry(1.9,0.06,0.7),mat(0x8a6a44,{roughness:0.7})); swim.position.set(0,0.1,-3.65); boat.add(swim);
-  const dash=new THREE.Mesh(new THREE.BoxGeometry(2.1,0.35,0.5),mat(0x2c3340,{roughness:0.5})); dash.position.set(0,0.75,1.3); boat.add(dash);
-  const glass=new THREE.MeshStandardMaterial({color:new THREE.Color(0.55,0.75,0.85),transparent:true,opacity:0.28,roughness:0.05,metalness:0.1,side:THREE.DoubleSide});
-  const ws=new THREE.Mesh(new THREE.PlaneGeometry(2.2,0.55),glass); ws.position.set(0,1.18,1.55); ws.rotation.x=-0.35; boat.add(ws);
-  const tube=(pts,r)=>{const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts),24,r,8,false),dark);m.castShadow=true;return m;};
-  boat.add(tube([V3(-1.1,0.95,1.55),V3(-1.05,1.45,1.5),V3(0,1.48,1.58),V3(1.05,1.45,1.5),V3(1.1,0.95,1.55)],0.02));
-  for(const sx of [-1,1]){
-    boat.add(tube([V3(sx*1.1,0.58,0.7),V3(sx*0.95,1.6,0.25),V3(sx*0.5,2.3,-0.4)],0.045));
-    boat.add(tube([V3(sx*1.1,0.58,-1.4),V3(sx*0.95,1.6,-0.9),V3(sx*0.5,2.3,-0.4)],0.045));
+  const bk=new Bake();
+  // hull sides (side-projected livery) and the deck either side of the cockpit
+  for(const s of [1,-1]){
+    const P=[],U=[],D=[];
+    for(const z of HULL_ST){
+      const sec=hullSection(z), u=boatU(z), c=gunwaleX(z), e=ckHalf(z);
+      P.push(sec.map(p=>[s*p[0],p[1],z])); U.push(sec.map(p=>[s>0?1-0.5*u:0.5*u,(p[1]-HY0)/(HY1-HY0)]));
+      const row=[]; for(let j=0;j<6;j++){const x=lerp(c,e,j/5); row.push([s*x,deckY(x,z),z]);} D.push(row);
+    }
+    bk.add(ladderGeo(P,U,s<0),BM.hull); bk.add(ladderGeo(D,null,s<0),BM.gel);
   }
-  boat.add(tube([V3(-0.5,2.3,-0.4),V3(0,2.34,-0.4),V3(0.5,2.3,-0.4)],0.045));
-  const bimini=new THREE.Mesh(new THREE.BoxGeometry(2.0,0.03,1.7),mat(0x1a1d22,{roughness:0.95})); bimini.position.set(0,2.42,-0.1); boat.add(bimini);
-  const knob=new THREE.Mesh(new THREE.SphereGeometry(0.07,10,8),dark); knob.position.set(0,PYLON_H,PYLON_Z); boat.add(knob);
-  const rail=new THREE.Mesh(new THREE.TorusGeometry(0.9,0.025,6,24,Math.PI),dark); rail.position.set(0,0.85,2.2); rail.rotation.x=-Math.PI/2; rail.rotation.z=Math.PI; boat.add(rail);
-  // tower speakers hung under the crossbar either side of the pylon, aimed back down the line at the rider
-  const grilleMat=mat(0x0b0c0e,{roughness:0.95});
-  for(const sx of [-1,1]){
-    const can=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.13,0.34,20),dark); can.rotation.x=Math.PI/2; can.position.set(sx*0.33,2.1,-0.42); boat.add(can);
-    const grille=new THREE.Mesh(new THREE.CircleGeometry(0.112,20),grilleMat); grille.rotation.y=Math.PI; grille.position.set(sx*0.33,2.1,-0.592); boat.add(grille);
-    const ring=new THREE.Mesh(new THREE.TorusGeometry(0.116,0.011,6,28),djLed); ring.position.set(sx*0.33,2.1,-0.594); boat.add(ring);
-    const clampM=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.1,0.07),dark); clampM.position.set(sx*0.33,2.27,-0.4); boat.add(clampM);
+  // cockpit liner: one loop round the opening, rolling over the lip and down to the floor
+  const CST=HULL_ST.filter(z=>z>=CK0-1e-6&&z<=CK1+1e-6), loop=[];
+  for(const z of CST)loop.push([ckHalf(z),z,floorHalf(z)]);
+  for(let i=CST.length-1;i>=0;i--)loop.push([-ckHalf(CST[i]),CST[i],-floorHalf(CST[i])]);
+  {const e=ckHalf(CK0), f=floorHalf(CK0); for(let k=1;k<10;k++)loop.push([lerp(-e,e,k/10),CK0,lerp(-f,f,k/10)]);}
+  loop.push(loop[0]);
+  const LR=[];
+  for(let i=0;i<loop.length;i++){
+    const [xt,z,xb]=loop[i], pr=loop[i>0?i-1:loop.length-2], nx=loop[i<loop.length-1?i+1:1];
+    let tx=nx[0]-pr[0], tz=nx[1]-pr[1]; const L=Math.hypot(tx,tz)||1, nX=-tz/L, nZ=tx/L, yt=deckY(Math.abs(xt),z), yb=floorY(z);
+    const r2=[xt+nX*0.018,yt-0.032,z+nZ*0.018];
+    LR.push([[xt,yt,z],[xt+nX*0.010,yt-0.009,z+nZ*0.010],r2,[lerp(r2[0],xb,0.5),lerp(r2[1],yb,0.5),lerp(r2[2],z,0.5)],[xb,yb,z]]);
   }
-  // driver (DJ Poorly P, headphones on) + spotter; heads sit on a neck pivot so they can nod along
-  function person(color,x,z,faceBack){const g=new THREE.Group();const body=new THREE.Mesh(new THREE.CylinderGeometry(0.17,0.2,0.55,10),mat(color,{roughness:0.8}));body.position.y=0.3;g.add(body);const hg=new THREE.Group();hg.position.y=0.6;g.add(hg);const head=new THREE.Mesh(new THREE.SphereGeometry(0.11,10,8),mat(0xd9a37e,{roughness:0.6}));head.position.y=0.12;hg.add(head);const cap=new THREE.Mesh(new THREE.SphereGeometry(0.115,10,8,0,Math.PI*2,0,Math.PI/2),mat(0x1d1d1d));cap.position.y=0.13;hg.add(cap);g.userData.head=hg;g.position.set(x,0.55,z);if(faceBack)g.rotation.y=Math.PI;return g;}
-  const poorly=person(0x2f6fb0,0.62,0.75,false), spotter=person(0xf2c14e,-0.6,-0.4,true);
-  { const hp=mat(0x111214,{roughness:0.45}), h=poorly.userData.head;
-    const band=new THREE.Mesh(new THREE.TorusGeometry(0.128,0.013,6,18,Math.PI),hp); band.position.y=0.13; h.add(band);
-    for(const sx of [-1,1]){ const cup=new THREE.Mesh(new THREE.CylinderGeometry(0.052,0.052,0.04,14),hp); cup.rotation.z=Math.PI/2; cup.position.set(sx*0.122,0.11,0); h.add(cup); } }
-  boat.add(poorly); boat.add(spotter); boat.userData.heads=[poorly.userData.head,spotter.userData.head];
-  const name=transomName(hull,'DJ POORLY P'); boat.add(name);
-  boat.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; } });
-  ws.castShadow=false; name.castShadow=false;
+  bk.add(ladderGeo(LR,null,false),BM.liner);
+  {const FL=[],FU=[]; for(const z of CST){const f=floorHalf(z), y=floorY(z), row=[], ur=[]; for(let j=0;j<5;j++){const x=lerp(f,-f,j/4); row.push([x,y,z]); ur.push([x*5,z*5]);} FL.push(row); FU.push(ur);}
+    bk.add(ladderGeo(FL,FU,false),BM.carpet);}
+  // transom, facing aft, with the wordmark the rider stares at all session
+  {
+    const z=-STERN_OFF, sec=hullSection(z), c=gunwaleX(z), pts=[];
+    for(const p of sec)pts.push(new THREE.Vector2(p[0],p[1]));
+    for(let k=1;k<10;k++){const x=lerp(c,-c,k/10); pts.push(new THREE.Vector2(x,deckY(x,z)));}
+    for(let k=sec.length-1;k>=1;k--)pts.push(new THREE.Vector2(-sec[k][0],sec[k][1]));
+    const pos=[],nor=[],uv=[],idx=[];
+    for(const p of pts){pos.push(p.x,p.y,z); nor.push(0,0,-1); uv.push((1.3-p.x)/2.6,(p.y-HY0)/(HY1-HY0));}
+    for(const t of THREE.ShapeUtils.triangulateShape(pts,[])){const a=pts[t[0]],b=pts[t[1]],cc=pts[t[2]]; if((b.x-a.x)*(cc.y-a.y)-(b.y-a.y)*(cc.x-a.x)>0)idx.push(t[0],t[2],t[1]); else idx.push(t[0],t[1],t[2]);}
+    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setAttribute('normal',new THREE.Float32BufferAttribute(nor,3)); g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2)); g.setIndex(idx);
+    bk.add(g,BM.transom);
+  }
+  // swim platform with its non-skid, and the twin jet nozzles tucked underneath
+  bk.add(rbox(2.36,0.10,0.62,0.045),BM.gel,TRS(0,0.23,-STERN_OFF-0.29));
+  bk.add(rbox(2.14,0.012,0.48,0.005),BM.platform,TRS(0,0.284,-STERN_OFF-0.31));
+  for(const s of [1,-1])bk.add(cylGeoY(0.07,0.085,16),BM.gloss,TRS(s*0.32,0.06,-STERN_OFF-0.12,Math.PI/2,0,0,[1,0.22,1]));
+  // rear sun deck
+  {const z=-2.9, w=2*gunwaleX(z)-0.34; bk.add(rbox(w,0.10,0.74,0.045),BM.vinyl,TRS(0,deckY(0,z)+0.035,z)); bk.add(rbox(0.32,0.012,0.70,0.004),BM.vinylDark,TRS(0,deckY(0,z)+0.086,z));}
+  // rear lounge: bench across the back, benches down both sides
+  {
+    const er=ckFull(-2.2), es=ckFull(-1.4);
+    bk.add(rbox(2*er,0.34,0.46,0.02),BM.liner,TRS(0,0.38,-2.23));
+    bk.add(rbox(2*er-0.08,0.14,0.50,0.05),BM.vinyl,TRS(0,0.55,-2.20));
+    bk.add(rbox(2*er-0.10,0.42,0.13,0.05),BM.vinyl,TRS(0,0.83,-2.39,-0.17));
+    bk.add(rbox(2*er-0.5,0.16,0.02,0.008),BM.vinylDark,TRS(0,0.84,-2.315,-0.17));
+    for(const s of [1,-1]){
+      bk.add(rbox(0.42,0.34,1.10,0.02),BM.liner,TRS(s*(es-0.23),0.38,-1.40));
+      bk.add(rbox(0.42,0.14,1.10,0.05),BM.vinyl,TRS(s*(es-0.23),0.55,-1.40));
+      bk.add(rbox(0.13,0.40,1.10,0.05),BM.vinyl,TRS(s*(es-0.05),0.83,-1.40,0,0,-s*0.15));
+      bk.add(rbox(0.02,0.15,0.8,0.008),BM.vinylDark,TRS(s*(es-0.125),0.84,-1.40,0,0,-s*0.15));
+    }
+  }
+  // helm and passenger buckets
+  for(const s of [1,-1]){
+    const x=s*0.53, z=0.05;
+    bk.add(cylGeoY(0.045,0.06,14),BM.alu,TRS(x,0.32,z,0,0,0,[1,0.2,1]));
+    bk.add(rbox(0.42,0.06,0.40,0.02),BM.vinylDark,TRS(x,0.44,z));
+    bk.add(rbox(0.50,0.12,0.48,0.05),BM.vinyl,TRS(x,0.52,z));
+    for(const b of [1,-1])bk.add(rbox(0.07,0.10,0.44,0.03),BM.vinyl,TRS(x+b*0.22,0.58,z));
+    bk.add(rbox(0.50,0.56,0.13,0.05),BM.vinyl,TRS(x,0.86,z-0.24,-0.18));
+    bk.add(rbox(0.30,0.36,0.02,0.008),BM.vinylDark,TRS(x,0.88,z-0.17,-0.18));
+  }
+  // consoles: helm to starboard with wheel, gauges and throttle; glovebox and grab rail to port
+  const cz0=0.70, cz1=1.42, xo=ckFull(1.06)+0.02, cw=xo-0.29, cx=(xo+0.29)/2;
+  for(const s of [1,-1]){
+    bk.add(rbox(cw,0.78,cz1-cz0,0.05),BM.liner,TRS(s*cx,0.61,(cz0+cz1)/2));
+    bk.add(rbox(cw-0.03,0.05,0.38,0.02),BM.dash,TRS(s*cx,1.005,cz0+0.24,0.12));
+  }
+  {
+    const W=V3(-0.53,1.0,0.46), ax=V3(0,-Math.sin(0.61),Math.cos(0.61));
+    bk.add(new THREE.TorusGeometry(0.17,0.016,10,40),BM.rubber,TRS(W.x,W.y,W.z,0.61));
+    for(const a of [Math.PI/2,Math.PI*7/6,-Math.PI/6])bk.add(rbox(0.15,0.024,0.012,0.006),BM.dash,TRS(W.x,W.y,W.z,0.61).multiply(TRS(Math.cos(a)*0.085,Math.sin(a)*0.085,0,0,0,a)));
+    bk.add(cylGeoY(0.03,0.03,14),BM.dash,segM(W,V3().copy(W).addScaledVector(ax,0.30)));
+    bk.add(rbox(0.40,0.15,0.04,0.012),BM.dash,TRS(-0.53,1.06,cz0+0.07,0.5));
+    for(const gx of [-0.10,0.10]){bk.add(cylGeoY(0.048,0.048,24),BM.grille,TRS(-0.53+gx,1.0725,cz0+0.047,0.5-Math.PI/2,0,0,[1,0.012,1])); bk.add(new THREE.TorusGeometry(0.05,0.005,6,28),BM.chrome,TRS(-0.53+gx,1.0735,cz0+0.045,0.5));}
+    bk.add(tubeGeo([V3(-xo+0.10,0.98,0.86),V3(-xo+0.10,1.08,0.80),V3(-xo+0.11,1.14,0.74)],0.012,false,12,8),BM.chrome);
+    bk.add(new THREE.SphereGeometry(0.03,12,10),BM.rubber,TRS(-xo+0.11,1.15,0.73));
+    bk.add(rbox(0.32,0.20,0.02,0.01),BM.dash,TRS(cx,0.82,cz0-0.005));
+    bk.add(tubeGeo([V3(0.36,1.03,0.80),V3(0.45,1.10,0.86),V3(0.62,1.10,0.86),V3(0.71,1.03,0.80)],0.012,false,16,8),BM.chrome);
+  }
+  // wrap-round split windscreen, open in the middle for the walk-through
+  for(const s of [1,-1]){
+    const zg=0.95, xg=gunwaleX(zg)-0.04, P0=[s*xg,zg], P1=[s*(xg-0.05),1.42], P2=[s*0.30,1.47], G=[];
+    const top=[], bot=[];
+    for(let i=0;i<=14;i++){
+      const t=i/14, a=(1-t)*(1-t), b=2*t*(1-t), c=t*t, x=a*P0[0]+b*P1[0]+c*P2[0], z=a*P0[1]+b*P1[1]+c*P2[1];
+      const dx=2*(1-t)*(P1[0]-P0[0])+2*t*(P2[0]-P1[0]), dz=2*(1-t)*(P1[1]-P0[1])+2*t*(P2[1]-P1[1]), L=Math.hypot(dx,dz);
+      let ox=dz/L, oz=-dx/L; if(oz<0){ox=-ox; oz=-oz;} // outward = forward
+      const yb=lerp(deckY(Math.abs(x),z)+0.01,1.0,smoothstep(0,1,t*1.3)), h=lerp(0.36,0.41,t);
+      const B=[x,yb,z], T=[x-ox*0.12,yb+h,z-oz*0.12]; G.push([B,T]); bot.push(V3(...B)); top.push(V3(...T));
+    }
+    bk.add(ladderGeo(G,null,false),BM.glass);
+    bk.add(tubeGeo(top,0.014,false,28,8),BM.alu); bk.add(tubeGeo(bot,0.016,false,28,8),BM.rubber);
+    for(const k of [0,14])bk.add(cylGeoY(0.014,0.014,8),BM.alu,segM(bot[k],top[k]));
+  }
+  // bow lounge: cushions along both sides of the footwell, backrests against the liner
+  for(const s of [1,-1]){
+    for(const [za,zb] of [[1.52,1.95],[1.95,2.36]]){
+      const ea=ckHalf(za)-0.17, eb=ckHalf(zb)-0.17, xm=(ea+eb)/2, zm=(za+zb)/2, yaw=Math.atan2(ea-eb,zb-za), len=Math.hypot(zb-za,ea-eb);
+      bk.add(rbox(0.32,0.12,len,0.045),BM.vinyl,TRS(s*xm,0.62,zm,0,-s*yaw,0));
+      bk.add(rbox(0.02,0.62-0.06-floorY(zm),len,0.006),BM.liner,TRS(s*(xm-0.16),(0.56+floorY(zm))/2,zm,0,-s*yaw,0));
+      bk.add(rbox(0.10,0.28,len,0.04),BM.vinyl,TRS(s*(xm+0.15),0.80,zm,0,-s*yaw,-s*0.18));
+    }
+  }
+  // bow: non-skid pad over the anchor locker, nav light, cleats on all four corners
+  {
+    const P=[]; for(let i=0;i<6;i++){const z=lerp(2.66,3.02,i/5), w=gunwaleX(z)*0.62, row=[]; for(let j=0;j<5;j++){const x=lerp(w,-w,j/4); row.push([x,deckY(x,z)+0.004,z]);} P.push(row);}
+    bk.add(ladderGeo(P,P.map(r=>r.map(p=>[p[0]*5,p[2]*5])),false),BM.nonskid);
+    const zl=3.08, yl=deckY(0,zl)+0.012;
+    bk.add(rbox(0.04,0.03,0.06,0.01),BM.navGreen,TRS(-0.02,yl,zl)); bk.add(rbox(0.04,0.03,0.06,0.01),BM.navRed,TRS(0.02,yl,zl));
+    for(const [s,z] of [[1,2.55],[-1,2.55],[1,-3.0],[-1,-3.0]]){const x=s*(gunwaleX(z)-0.09); bk.add(rbox(0.035,0.025,0.15,0.01),BM.chrome,TRS(x,deckY(x,z)+0.014,z));}
+  }
+  // tower: brushed aluminium, front legs behind the screen, rear legs aft, A-shaped from the side
+  const TY=2.16, TX=0.60, TZF=-0.04, TZR=-0.78;
+  {
+    const pts=[], C=[[1,1],[-1,1],[-1,-1],[1,-1]], rr=0.09, cz=(TZF+TZR)/2, hz=(TZF-TZR)/2;
+    C.forEach(([sx,sz],k)=>{for(let i=0;i<=3;i++){const a=(k+i/3)*Math.PI/2; pts.push(V3(sx*(TX-rr)+rr*Math.cos(a),TY,cz+sz*(hz-rr)+rr*Math.sin(a)));}});
+    bk.add(tubeGeo(pts,0.032,true,64,10),BM.alu);
+    bk.add(cylGeoY(0.028,0.028,12),BM.alu,segM(V3(-TX,TY,PYLON_Z),V3(TX,TY,PYLON_Z)));
+    bk.add(cylGeoY(0.026,0.03,12),BM.alu,segM(V3(0,TY,PYLON_Z),V3(0,PYLON_H-0.03,PYLON_Z)));
+    bk.add(new THREE.SphereGeometry(0.048,16,12),BM.chrome,TRS(0,PYLON_H,PYLON_Z));
+  }
+  for(const s of [1,-1]){
+    const zf=0.9, xf=gunwaleX(zf)-0.11, zr=-1.95, xr=gunwaleX(zr)-0.11;
+    const front=new THREE.CatmullRomCurve3([V3(s*xf,deckY(xf,zf),zf),V3(s*0.94,1.58,0.52),V3(s*0.71,2.03,0.08),V3(s*TX,TY,TZF-0.05)]);
+    const rear=new THREE.CatmullRomCurve3([V3(s*xr,deckY(xr,zr),zr),V3(s*0.95,1.54,-1.47),V3(s*0.72,2.02,-0.93),V3(s*TX,TY,TZR+0.05)]);
+    for(const c of [front,rear]){
+      bk.add(new THREE.TubeGeometry(c,40,0.034,10,false),BM.alu);
+      const b=c.getPoint(0); bk.add(rbox(0.11,0.03,0.16,0.01),BM.alu,TRS(b.x,b.y+0.012,b.z));
+    }
+    // board rack on each rear leg
+    const p=rear.getPoint(0.42), q=V3(p.x+s*0.13,p.y,p.z);
+    bk.add(rbox(0.08,0.09,0.08,0.02),BM.rubber,TRS(p.x,p.y,p.z)); bk.add(cylGeoY(0.02,0.02,10),BM.rubber,segM(p,q));
+    for(const dz of [0.045,-0.045])bk.add(cylGeoY(0.013,0.013,8),BM.rubber,segM(V3(q.x,q.y-0.12,q.z+dz),V3(q.x,q.y+0.17,q.z+dz)));
+    bk.add(cylGeoY(0.013,0.013,8),BM.rubber,segM(V3(q.x,q.y-0.12,q.z+0.045),V3(q.x,q.y-0.12,q.z-0.045)));
+    if(s>0){const m=front.getPoint(0.5); bk.add(rbox(0.20,0.10,0.04,0.015),BM.rubber,TRS(m.x+0.12,m.y,m.z)); bk.add(rbox(0.18,0.08,0.006,0.012),BM.chrome,TRS(m.x+0.12,m.y,m.z-0.022)); bk.add(cylGeoY(0.012,0.012,8),BM.rubber,segM(m,V3(m.x+0.06,m.y,m.z)));}
+    // a tower speaker hanging under the rear bar, aimed back down the rope at the rider
+    const bar=V3(s*0.40,TY,TZR), C=V3(s*0.40,TY-0.205,TZR-0.05), Z=V3(0,-0.22,-1).normalize(), X=V3().crossVectors(UP,Z).normalize(), Y=V3().crossVectors(Z,X), m=basisM(C,X,Y,Z);
+    const loc=mx=>new THREE.Matrix4().multiplyMatrices(m,mx);
+    bk.add(new THREE.CylinderGeometry(0.112,0.104,0.30,32,1,true).rotateX(Math.PI/2),BM.gloss,m.clone());
+    bk.add(new THREE.SphereGeometry(0.104,28,10,0,Math.PI*2,Math.PI/2,Math.PI/2).rotateX(Math.PI/2),BM.gloss,loc(TRS(0,0,-0.15,0,0,0,[1,1,0.45])));
+    bk.add(new THREE.CircleGeometry(0.1,32),BM.grille,loc(TRS(0,0,0.142)));
+    bk.add(new THREE.SphereGeometry(0.032,14,8,0,Math.PI*2,0,Math.PI/2).rotateX(Math.PI/2),BM.chrome,loc(TRS(0,0,0.142)));
+    bk.add(new THREE.TorusGeometry(0.108,0.008,8,40),BM.chrome,loc(TRS(0,0,0.151))); bk.add(new THREE.TorusGeometry(0.094,0.007,8,40),djLed,loc(TRS(0,0,0.149)));
+    const top=V3().copy(C).addScaledVector(Y,0.1);
+    bk.add(cylGeoY(0.016,0.016,10),BM.alu,segM(top,bar)); bk.add(rbox(0.09,0.08,0.08,0.02),BM.alu,TRS(bar.x,bar.y,bar.z));
+  }
+  // navy bimini on its own frame, reaching forward over the helm
+  {
+    const BX=0.76, BZ0=-0.30, BZ1=1.12, BY=TY+0.055, VH=0.085;
+    const bimY=(x,z)=>{const t=(z-BZ0)/(BZ1-BZ0); return BY+0.065*(1-(x/BX)**2)+0.03*t-0.01*Math.sin(Math.PI*t*2)**2;};
+    const G=[]; for(let i=0;i<=14;i++){const z=lerp(BZ0,BZ1,i/14), row=[]; for(let j=0;j<=12;j++){const x=lerp(BX,-BX,j/12); row.push([x,bimY(x,z),z]);} G.push(row);}
+    bk.add(ladderGeo(G,null,false),BM.canvas);
+    const edge=[]; for(let i=0;i<=10;i++){const z=lerp(BZ0,BZ1,i/10); edge.push([BX,z]);} for(let j=1;j<=12;j++)edge.push([lerp(BX,-BX,j/12),BZ1]); for(let i=9;i>=0;i--)edge.push([-BX,lerp(BZ0,BZ1,i/10)]);
+    bk.add(ladderGeo(edge.map(([x,z])=>[[x,bimY(x,z),z],[x,bimY(x,z)-VH,z]]),null,false),BM.canvas);
+    const back=[]; for(let j=0;j<=16;j++){const x=lerp(BX,-BX,j/16), y=bimY(x,BZ0); back.push([[x,y,BZ0],[x,y-VH,BZ0]]);}
+    bk.add(ladderGeo(back,back.map((r,j)=>[[j/16,1],[j/16,0]]),false),BM.valance);
+    for(const s of [1,-1]){
+      bk.add(tubeGeo([V3(s*(BX-0.03),bimY(BX,BZ0)-0.03,BZ0+0.02),V3(s*(BX-0.03),bimY(BX,0.4)-0.03,0.4),V3(s*(BX-0.03),bimY(BX,BZ1)-0.03,BZ1-0.03)],0.016,false,20,8),BM.alu);
+      bk.add(cylGeoY(0.016,0.016,8),BM.alu,segM(V3(s*TX,TY,-0.12),V3(s*(BX-0.03),bimY(BX,-0.12)-0.03,-0.12)));
+      const fc=V3(s*(BX-0.04),bimY(BX,BZ1)-0.06,BZ1-0.04), zg=0.95; bk.add(cylGeoY(0.006,0.006,6),BM.rubber,segM(fc,V3(s*(gunwaleX(zg)-0.06),deckY(gunwaleX(zg),zg)+0.30,zg+0.02)));
+    }
+    for(const z of [0.42,BZ1-0.03]){const a=[]; for(let j=0;j<=8;j++){const x=lerp(BX-0.03,-(BX-0.03),j/8); a.push(V3(x,bimY(x,z)-0.025,z));} bk.add(tubeGeo(a,0.014,false,24,8),BM.alu);}
+  }
+  bk.build(boat);
 }
+
+// ---------- crew: DJ Poorly P at the helm, a spotter and a mate, built from the rider's own body ----------
+// Each is another copy of the skinned MakeHuman rider (assets/rider.js), recoloured, with the helmet thinned down onto the
+// scalp as short hair or a cap, and posed sitting in the boat. As with the rider every bind rotation is identity, so a bone
+// is posed by turning its rest frame onto a target frame (frameQuat). The figures sit in boat space, so every target below
+// is in boat coordinates. Only the heads move after that: they watch the rider and nod along to the set.
+const CREW=[];
+function crewSpecs(){
+  const mate=V3(1,0,-0.55).normalize(), mL=V3().crossVectors(UP,mate), mH=V3(-0.73,0.70,-1.30);
+  const onFloor=(h,f,l,s)=>V3().copy(h).addScaledVector(f,0.47).addScaledVector(l,s*0.11).setY(0.29);
+  return [
+    {skin:[1,1,1], top:0x17181c, shorts:0x1f1b48, hair:0x2a1c12, phones:true, frame:0x141414, lens:0xe2a640, // DJ Poorly P, headphones on
+     hips:V3(-0.53,0.66,0.06), up:V3(0,1,0.05), fwd:V3(0,0,1), ankles:[V3(-0.42,0.29,0.50),V3(-0.64,0.29,0.46)], toes:[V3(0.12,0,1),V3(-0.12,0,1)], kneePole:V3(0,0.5,1),
+     wrists:[V3(-0.40,1.03,0.45),V3(-0.66,1.03,0.45)], elbowPoles:[V3(1,-1,-0.4),V3(-1,-1,-0.4)], curl:1, maxYaw:1.5, nod:0.16, phase:0},
+    {skin:[0.58,0.5,0.45], top:0xe6007e, shorts:0x15161a, hair:0x0d0b0a, frame:0x7b3fe4, lens:0xe2a640, // spotter, kneeling on the rear bench to watch
+     hips:V3(0.42,1.05,-2.24), up:V3(0,1,-0.5), fwd:V3(0,0,-1), ankles:[V3(0.31,0.70,-1.86),V3(0.53,0.70,-1.86)], toes:[V3(0,-0.6,1),V3(0,-0.6,1)], footUp:V3(0,-1,-0.4), kneePole:V3(0,-0.3,-1),
+     wrists:[V3(0.32,1.07,-2.52),V3(0.52,1.07,-2.52)], elbowPoles:[V3(-1,-0.5,0.2),V3(1,-0.5,0.2)], curl:0.45, watch:true, maxYaw:1.2, nod:0.1, phase:0.7},
+    {skin:[1.12,1.05,1.0], top:0x00a5a0, shorts:0x5b636e, hair:0x5a3d22, cap:0x1f1b48, frame:0x00b2a9, lens:0xff7a1a, // a mate on the starboard bench, turned to watch
+     hips:mH, up:V3().copy(UP).addScaledVector(mate,-0.15), fwd:mate, ankles:[onFloor(mH,mate,mL,1),onFloor(mH,mate,mL,-1)], toes:[mate,mate], kneePole:V3().copy(mate).addScaledVector(UP,0.5),
+     wristsAt:(kl,kr,up,f)=>[kl,kr].map(k=>V3().copy(k).addScaledVector(up,0.06).addScaledVector(f,-0.1)),
+     elbowPoles:[V3().copy(mL).addScaledVector(UP,-0.8),V3().copy(mL).negate().addScaledVector(UP,-0.8)], curl:0.4, watch:true, maxYaw:1.3, nod:0.12, phase:1.3}];
+}
+function loadCrew(){
+  if(!window.WAKE_RIDER_GLB||!THREE.GLTFLoader)return; // no model: the boat runs without a crew
+  let buf; try{ const s=atob(window.WAKE_RIDER_GLB); buf=new Uint8Array(s.length); for(let i=0;i<s.length;i++)buf[i]=s.charCodeAt(i); }catch(e){ return; }
+  for(const o of crewSpecs())new THREE.GLTFLoader().parse(buf.buffer,'',g=>{ try{ addCrew(g.scene,o); }catch(e){ console.warn('crew:',e); } },e=>console.warn('crew:',e));
+}
+const _cq=new THREE.Quaternion(), _cq2=new THREE.Quaternion(), _cd=V3(), _cl=V3(), _cu=V3();
+function crewSet(F,n,q){ const b=F.bones[n]; F.wq[n].copy(q); b.quaternion.copy(_cq2.copy(F.wq[b.parent.name]).invert().multiply(q)); }
+function crewFk(F,n){ const b=F.bones[n]; return F.wp[n].copy(b.position).applyQuaternion(F.wq[b.parent.name]).add(F.wp[b.parent.name]); }
+function addCrew(model,o){
+  const F={o,bones:{},rest:{},wq:{},wp:{},curl:{},mesh:{},yaw:0,pitch:0};
+  model.traverse(x=>{ if(x.isBone)F.bones[x.name]=x; if(x.isMesh){ F.mesh[x.material.name]=x; x.castShadow=true; x.receiveShadow=true; x.frustumCulled=false; } });
+  const B=F.bones; if(!B.Root||!B.head||!F.mesh.skin)return;
+  (function walk(b,at){ F.rest[b.name]=V3().copy(b.position).add(at); F.wq[b.name]=new THREE.Quaternion(); F.wp[b.name]=V3();
+    for(const ch of b.children) if(ch.isBone) walk(ch,F.rest[b.name]); })(B.Root,V3());
+  const rest=F.rest, dir=(a,b)=>V3().subVectors(rest[b],rest[a]).normalize(), len=(a,b)=>rest[a].distanceTo(rest[b]);
+  F.arm1=len('upperarm_l','lowerarm_l'); F.arm2=len('lowerarm_l','hand_l'); F.leg1=len('thigh_l','calf_l'); F.leg2=len('calf_l','foot_l');
+  for(const s of ['l','r']){
+    const h=rest['hand_'+s], k=dir('pinky_01_'+s,'index_01_'+s), back=V3().crossVectors(dir('hand_'+s,'middle_01_'+s),k).normalize();
+    if(V3().subVectors(rest['thumb_02_'+s],h).dot(back)>0)back.negate(); F['back_'+s]=back;
+    for(const fn of ['index','middle','ring','pinky','thumb']) F.curl[fn+'_'+s]=V3().crossVectors(dir(fn+'_01_'+s,fn+'_02_'+s),V3().copy(back).negate()).normalize();
+    const ff=dir('foot_'+s,'ball_'+s); ff.y=0; F['footFwd_'+s]=ff.normalize();
+  }
+  dressCrew(F,o); poseCrew(F,o);
+  F.f=V3(o.fwd.x,0,o.fwd.z).normalize(); F.L=V3().crossVectors(UP,F.f);
+  boat.add(model); CREW.push(F);
+}
+// fabric and skin like the rider's (sheen on the cloth, a little warm sheen on the skin); the helmet becomes hair or a cap
+function dressCrew(F,o){
+  const M=F.mesh, cloth=(mesh,color,rough=0.8)=>{ const m=new THREE.MeshPhysicalMaterial({name:mesh.material.name,color,roughness:rough,sheen:0.5,sheenRoughness:0.65,side:mesh.material.side});
+    m.sheenColor.setRGB(0.3,0.3,0.32); mesh.material.dispose(); mesh.material=m; return m; };
+  { const src=M.skin.material, m=new THREE.MeshPhysicalMaterial({name:'skin',vertexColors:true,roughness:src.roughness,sheen:0.3,sheenRoughness:0.5,clearcoat:0.04,clearcoatRoughness:0.35});
+    m.sheenColor.setRGB(0.85,0.42,0.32); m.color.setRGB(...o.skin); src.dispose(); M.skin.material=m; }
+  if(M.vest)cloth(M.vest,o.top,0.85); if(M.shorts)cloth(M.shorts,o.shorts);
+  if(M.boots){ // barefoot on the boat: the boots take the skin's colour and finish
+    const m=M.skin.material.clone(); m.vertexColors=false; m.color.set(0xc99272).multiply(new THREE.Color().setRGB(...o.skin)); M.boots.material.dispose(); M.boots.material=m; }
+  paintShirt(F,o.top);
+  if(M.frame){ M.frame.material.dispose(); M.frame.material=new THREE.MeshPhysicalMaterial({color:o.frame,roughness:0.35,clearcoat:0.6,clearcoatRoughness:0.15}); }
+  if(M.lens){ M.lens.material.dispose(); M.lens.material=new THREE.MeshPhysicalMaterial({color:o.lens,roughness:0.05,metalness:0.85,clearcoat:1,clearcoatRoughness:0.02}); }
+  if(!M.helmet)return;
+  // the helmet is the scalp grown out 3 cm into a shell; pulled back to 1 cm it is a short haircut (or the crown of a cap)
+  const g=M.helmet.geometry, p=g.attributes.position, n=g.attributes.normal;
+  for(let i=0;i<p.count;i++)p.setXYZ(i,p.getX(i)-n.getX(i)*0.019,p.getY(i)-n.getY(i)*0.019,p.getZ(i)-n.getZ(i)*0.019);
+  p.needsUpdate=true; g.computeBoundingBox(); g.computeBoundingSphere();
+  const hb=g.boundingBox, lb=(M.lens?(M.lens.geometry.computeBoundingBox(),M.lens.geometry.boundingBox):hb), at=V3().copy(F.rest.head);
+  M.helmet.material.dispose();
+  M.helmet.material=o.cap?new THREE.MeshPhysicalMaterial({color:o.cap,roughness:0.85,sheen:0.5,sheenRoughness:0.7}):new THREE.MeshPhysicalMaterial({color:o.hair,roughness:0.9,sheen:0.6,sheenRoughness:0.45});
+  if(o.hair)M.helmet.material.sheenColor.setRGB(0.25,0.2,0.16);
+  const onHead=(geo,mt,x,y,z,rx=0,ry=0,rz=0)=>{ const me=new THREE.Mesh(geo,mt); me.position.set(x-at.x,y-at.y,z-at.z); me.rotation.set(rx,ry,rz); me.castShadow=true; F.bones.head.add(me); return me; };
+  if(o.cap){ // a peak over the shades and a Lobster-yellow patch on the front
+    onHead(new THREE.CylinderGeometry(0.088,0.088,0.008,24,1,false,-Math.PI/2,Math.PI),M.helmet.material,0,lb.max.y+0.034,hb.max.z-0.035,0.16);
+    onHead(rbox(0.05,0.024,0.006,0.004),new THREE.MeshStandardMaterial({color:0xffed00,roughness:0.6}),0,lb.max.y+0.075,hb.max.z-0.004,-0.6);
+  }
+  if(o.phones){ // DJ headphones: a band over the top, a cup on each ear
+    const hp=new THREE.MeshPhysicalMaterial({color:0x111214,roughness:0.45,clearcoat:0.5}), cx=(hb.min.x+hb.max.x)/2, cz=(hb.min.z+hb.max.z)/2-0.005, hw=(hb.max.x-hb.min.x)/2+0.004, ey=lb.min.y-0.012;
+    onHead(new THREE.TorusGeometry(hw,0.012,8,32,Math.PI).scale(1,(hb.max.y+0.006-ey)/hw,1),hp,cx,ey,cz);
+    for(const s of [1,-1]){ onHead(new THREE.CylinderGeometry(0.046,0.046,0.034,20),hp,cx+s*(hw+0.008),ey,cz,0,0,Math.PI/2);
+      onHead(new THREE.TorusGeometry(0.03,0.006,6,20),djLed,cx+s*(hw+0.026),ey,cz,0,Math.PI/2,0); }
+  }
+}
+// the rider's vest stops at the armpits; for a T-shirt, colour the skin over the shoulders and the top half of each
+// upper arm (picked out by the bones that move it) to match. The skin is vertex-coloured, so this costs nothing to draw.
+function paintShirt(F,hex){
+  const m=F.mesh.skin, g=m.geometry, P=g.attributes.position, SI=g.attributes.skinIndex, SW=g.attributes.skinWeight, C=g.attributes.color;
+  if(!C||!SI||!SW||!m.skeleton)return;
+  const names=m.skeleton.bones.map(b=>b.name), c=new THREE.Color(hex), v=V3(), ax=V3();
+  for(let i=0;i<P.count;i++){
+    let best=0,bw=-1; for(let k=0;k<4;k++){const w=SW.getComponent(i,k); if(w>bw){bw=w;best=SI.getComponent(i,k);}}
+    const n=names[best]; let shirt=n==='spine_02'||n==='spine_03'||n==='clavicle_l'||n==='clavicle_r';
+    if(n==='upperarm_l'||n==='upperarm_r'){ const s=n.slice(-1), a=F.rest['upperarm_'+s], b=F.rest['lowerarm_'+s];
+      ax.subVectors(b,a); shirt=v.fromBufferAttribute(P,i).sub(a).dot(ax)/ax.lengthSq()<0.5; }
+    if(shirt)C.setXYZ(i,c.r,c.g,c.b);
+  }
+  C.needsUpdate=true;
+}
+function poseCrew(F,o){
+  const B=F.bones, rest=F.rest, q=_cq, rd=(a,b)=>V3().subVectors(rest[b],rest[a]).normalize();
+  const up=V3().copy(o.up).normalize(), L=V3().crossVectors(up,o.fwd).normalize(); // the model's +x is the figure's left
+  B.Root.quaternion.identity(); F.wq.Root.identity();
+  frameQuat(rd('pelvis','spine_01'),RX,up,L,q); crewSet(F,'pelvis',q);
+  // place the pelvis so the midpoint of the hip joints lands on the seat
+  const mid=V3().addVectors(B.thigh_l.position,B.thigh_r.position).multiplyScalar(0.5).applyQuaternion(F.wq.pelvis);
+  F.wp.pelvis.copy(o.hips).sub(mid); B.Root.position.copy(F.wp.pelvis).sub(B.pelvis.position); F.wp.Root.copy(B.Root.position);
+  for(const [a,b] of [['spine_01','spine_02'],['spine_02','spine_03'],['spine_03','neck_01'],['neck_01','head']]){ frameQuat(rd(a,b),RX,up,L,q); crewSet(F,a,q); }
+  crewSet(F,'clavicle_l',F.wq.spine_03); crewSet(F,'clavicle_r',F.wq.spine_03);
+  for(const n of ['spine_01','spine_02','spine_03','neck_01','head','clavicle_l','clavicle_r','upperarm_l','upperarm_r','thigh_l','thigh_r'])crewFk(F,n);
+  // legs: a two-bone solve from the hip to the ankle, the knee toward its pole, the foot set by its toes
+  const knees=[];
+  [['l',0],['r',1]].forEach(([s,i])=>{
+    const H=F.wp['thigh_'+s], A=o.ankles[i], K=V3(); ik2(H,A,F.leg1,F.leg2,o.kneePole,K);
+    const t=V3().subVectors(A,H), kf=V3().subVectors(K,H); kf.addScaledVector(t,-kf.dot(t)/Math.max(t.lengthSq(),1e-6)); if(kf.lengthSq()<1e-6)kf.copy(o.kneePole);
+    frameQuat(rd('thigh_'+s,'calf_'+s),RZ,V3().subVectors(K,H),kf,q); crewSet(F,'thigh_'+s,q); crewFk(F,'calf_'+s);
+    frameQuat(rd('calf_'+s,'foot_'+s),RZ,V3().subVectors(A,K),kf,q); crewSet(F,'calf_'+s,q); crewFk(F,'foot_'+s);
+    frameQuat(F['footFwd_'+s],RY,o.toes[i],o.footUp||UP,q); crewSet(F,'foot_'+s,q); crewSet(F,'ball_'+s,q);
+    knees.push(K);
+  });
+  // arms: wrist to its target, elbow toward its pole, back of the hand up; fingers wrap the wheel or rest half-curled
+  const wr=o.wristsAt?o.wristsAt(knees[0],knees[1],up,o.fwd):o.wrists;
+  [['l',0],['r',1]].forEach(([s,i])=>{
+    const S=F.wp['upperarm_'+s], W=wr[i], E=V3(); ik2(S,W,F.arm1,F.arm2,o.elbowPoles[i],E);
+    const fore=V3().subVectors(W,E), upper=V3().subVectors(E,S), flex=V3().copy(fore).addScaledVector(upper,-fore.dot(upper)/Math.max(upper.lengthSq(),1e-6));
+    if(flex.lengthSq()<1e-6)flex.copy(o.elbowPoles[i]).negate();
+    frameQuat(rd('upperarm_'+s,'lowerarm_'+s),RZ,upper,flex,q); crewSet(F,'upperarm_'+s,q);
+    frameQuat(rd('lowerarm_'+s,'hand_'+s),F['back_'+s],fore,UP,q); crewSet(F,'lowerarm_'+s,q); crewSet(F,'hand_'+s,q);
+    for(const fn of ['index','middle','ring','pinky','thumb']){ const ang=fn==='thumb'?THUMB_CURL:FINGER_CURL;
+      for(let k=1;k<=3;k++) B[fn+'_0'+k+'_'+s].quaternion.setFromAxisAngle(F.curl[fn+'_'+s],ang[k-1]*DEG*o.curl); }
+  });
+  frameQuat(RZ,RY,o.fwd,UP,q); crewSet(F,'head',q);
+}
+// heads: the spotter and the mate watch the rider, the driver watches the water with a glance back every few seconds,
+// and everyone nods along while the set is playing
+function updateCrew(dt){
+  for(const F of CREW){
+    const o=F.o; _cd.set(R.pos.x,Math.max(R.pos.y,0)+1.0,R.pos.z-boatZ).sub(F.wp.head);
+    const fx=_cd.dot(F.f), lx=_cd.dot(F.L); let ty=Math.atan2(lx,fx), tp=Math.atan2(_cd.y,Math.hypot(fx,lx));
+    if(!o.watch&&(simTime+3)%8>1.5){ ty=0.08*Math.sin(simTime*0.5); tp=-0.06; }
+    F.yaw=damp(F.yaw,clamp(ty,-o.maxYaw,o.maxYaw),4,dt); F.pitch=damp(F.pitch,clamp(tp,-0.5,0.3),4,dt);
+    const p=F.pitch-o.nod*dj.glow*Math.pow(Math.abs(Math.sin(simTime*Math.PI*2+o.phase)),3), y=F.yaw, cp=Math.cos(p), sp=Math.sin(p);
+    _cl.copy(F.f).multiplyScalar(cp*Math.cos(y)).addScaledVector(F.L,cp*Math.sin(y)).addScaledVector(UP,sp);
+    _cu.copy(F.f).multiplyScalar(-sp*Math.cos(y)).addScaledVector(F.L,-sp*Math.sin(y)).addScaledVector(UP,cp);
+    frameQuat(RZ,RY,_cl,_cu,_cq); crewSet(F,'head',_cq);
+  }
+}
+
 scene.add(boat);
 const pylonW=V3(); function pylonPos(){return pylonW.set(0,PYLON_H,boatZ+PYLON_Z);}
 
@@ -1684,12 +2078,10 @@ function updateEffects(dt){
   for(let i=0;i<8;i++)spray.emit((Math.random()-0.5)*1.3,0.0,boatZ-STERN_OFF-0.3-Math.random()*0.8,(Math.random()-0.5)*2.4,1.2+Math.random()*3.4,BOAT_SPEED*0.3+Math.random()*2,0.45+Math.random()*0.5,0.08+Math.random()*0.28);
   spray.update(dt); updateFoam(dt,simTime);
 }
-function updateBoatVisual(){
+function updateBoatVisual(dt){
   boat.position.set(0,0.02+0.03*Math.sin(simTime*2.1),boatZ);
   boat.rotation.set(-2.5*DEG+0.4*DEG*Math.sin(simTime*1.7),0,1.2*DEG*Math.sin(simTime*1.3));
-  // the crew nod along while Poorly P's set is playing
-  const [hp,hs]=boat.userData.heads, nod=ph=>Math.pow(Math.abs(Math.sin(simTime*Math.PI*2+ph)),3);
-  hp.rotation.x=0.16*dj.glow*nod(0); hs.rotation.x=0.1*dj.glow*nod(0.7);
+  updateCrew(dt); // heads watch the rider and nod along while Poorly P's set is playing
 }
 // camera
 // 0 follow, 1 long lens from well back (how wake films are shot: compressed background, rider the same size), 2 boat tower
@@ -2034,7 +2426,7 @@ function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false)
   renderer.getDrawingBufferSize(_dbs); const bw=Math.max(2,Math.floor(_dbs.x)),bh=Math.max(2,Math.floor(_dbs.y));
   post.sceneRT.setSize(bw,bh); post.bright.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurA.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurB.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2));
   post.finalMat.uniforms.uRes.value.set(bw,bh); reflRT.setSize(Math.max(2,Math.floor(bw*reflScale)),Math.max(2,Math.floor(bh*reflScale))); }
-addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2); loadRiderModel();
+addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2); loadRiderModel(); loadCrew();
 resetRider(); updateCamera(0,true); updateSessionHUD(); djBoot();
 Object.defineProperty(R,'switchStanceAtTakeoff',{get(){return R._sst;},set(v){R._sst=v;}}); R._sst=false;
 const _takeoff=takeoff; // record stance at takeoff for FS/BS naming
@@ -2048,7 +2440,7 @@ function frame(now){
   const raw=(now-last)/1000; let dt=Math.min(0.05,raw); last=now; if(dt<=0)dt=0.0001;
   if(document.visibilityState==='visible' && raw<0.5)autoQuality(raw);
   if(!paused){ gatherInput(); physics(dt); }   // Settings pauses the ride: the world holds still, sound and music play on
-  updateBoatVisual(); updateRiderVisual(paused?0.0001:dt); if(!paused)updateEffects(dt); updateCamera(dt,false); updateAudio(dt); djUpdate(dt); updateHUD(dt); updateFade(dt);
+  updateBoatVisual(dt); updateRiderVisual(paused?0.0001:dt); if(!paused)updateEffects(dt); updateCamera(dt,false); updateAudio(dt); djUpdate(dt); updateHUD(dt); updateFade(dt);
   // scrolling world
   const sp=WATER_SP; waterNear.position.set(Math.round(camera.position.x/sp)*sp,0,Math.round((camera.position.z+62)/sp)*sp);
   waterFar.position.set(camera.position.x,-0.02,camera.position.z);
