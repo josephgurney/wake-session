@@ -763,8 +763,15 @@ const handle=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.36,8),mat(0
 const ropeSegs=[]; {const m=mat(0xe8e4d8,{roughness:0.9});for(let i=0;i<16;i++){const s=new THREE.Mesh(new THREE.CylinderGeometry(0.011,0.011,1,5),m);scene.add(s);ropeSegs.push(s);}}
 
 // joints, all in rider space: board along z (nose +z), chest facing -x, feet locked in the bindings
-const J={hips:V3(),hipF:V3(),hipB:V3(),kneeF:V3(),kneeB:V3(),footF:V3(0,0.07,0.26),footB:V3(0,0.07,-0.26),sh:V3(),shF:V3(),shB:V3(),elF:V3(),elB:V3(),handF:V3(),handB:V3(),head:V3(),C:V3(),torsoDir:V3(),axis:V3(),handle:V3(),handleAxis:V3(),look:V3(),headUp:V3(0,1,0),headLeft:V3(0,0,1),poleF:V3(),poleB:V3(),ropeH:V3(0,0,1),phi:0,holdF:1,holdB:1};
+const J={hips:V3(),hipF:V3(),hipB:V3(),kneeF:V3(),kneeB:V3(),footF:V3(0,0.07,0.26),footB:V3(0,0.07,-0.26),sh:V3(),shF:V3(),shB:V3(),elF:V3(),elB:V3(),handF:V3(),handB:V3(),head:V3(),C:V3(),torsoDir:V3(),axis:V3(),handle:V3(),handleAxis:V3(),look:V3(),headUp:V3(0,1,0),headLeft:V3(0,0,1),poleF:V3(),poleB:V3(),kneePoleF:V3(),kneePoleB:V3(),ropeH:V3(0,0,1),phi:0,holdF:1,holdB:1};
 const FACING=-1; // regular stance: chest faces local -x
+const COM_H=0.9;  // the centre of mass, this far above the board standing: in the air the body turns about it, not the feet
+// the rider's frame (the board) for orientation q: on the water it is the physics point; in the air the centre of mass
+// (where the board's point would put it without the trick) follows the flight path and the board swings round it
+function riderOrigin(q,out){ out.copy(R.pos); if(R.state==='air')out.add(_ro.set(0,COM_H,0).applyQuaternion(R.baseQuat)).sub(_ro.set(0,COM_H,0).applyQuaternion(q)); return out; }
+// the rider's orientation in the air: the spin about the vertical on top of the takeoff heading, then flip and roll
+function airQuat(out){ return out.setFromAxisAngle(UP,R.spin*DEG).multiply(R.baseQuat).multiply(_aq2.setFromAxisAngle(_ro.set(1,0,0),R.flip*DEG)).multiply(_aq2.setFromAxisAngle(_ro.set(0,0,1),R.roll*DEG)); }
+const _ro=V3(), _aq2=new THREE.Quaternion();
 let LEG=0.47; const BOARD_C=V3(0,0.07,0); // thigh/shin length and ankle centre; the skinned model swaps in its own
 // where each grab takes hold of the board: indy/tail with the back hand, melon/nose with the front
 const GRAB_PT={Indy:V3(FACING*0.22,0.05,-0.08),Tail:V3(0,0.05,-0.67),Melon:V3(-FACING*0.22,0.05,0.08),Nose:V3(0,0.05,0.67)};
@@ -849,12 +856,16 @@ function solvePose(p){
   for(let i=0;i<8;i++){ _hx.copy(look).addScaledVector(torsoDir,-look.dot(torsoDir)); _hy.copy(C).addScaledVector(torsoDir,-C.dot(torsoDir));
     if(_hx.normalize().dot(_hy.normalize())>=0.17)break; look.addScaledVector(_hy,0.3).normalize(); }
   _hy.copy(torsoDir).addScaledVector(look,-torsoDir.dot(look)).normalize(); _hx.crossVectors(_hy,look); J.headUp.copy(_hy); J.headLeft.copy(_hx);
-  // place meshes
+  placeParts();
+}
+// the primitive rider (shown when the model can't load), placed on the joints
+function placeParts(){
+  const B=poseParams.axis, torsoDir=J.torsoDir;
   P.pelvis.position.copy(J.hips); P.pelvis.quaternion.setFromUnitVectors(UP,B);
   placeLimb(P.torso,V3().copy(J.hips).addScaledVector(torsoDir,0.04),J.sh);
   placeLimb(P.vest,V3().copy(J.hips).addScaledVector(torsoDir,0.09),V3().copy(J.sh).addScaledVector(torsoDir,0.03));
   placeLimb(P.neck,J.sh,J.head);
-  P.head.position.copy(J.head); P.head.quaternion.setFromRotationMatrix(_hm.makeBasis(_hx,_hy,look));
+  P.head.position.copy(J.head); P.head.quaternion.setFromRotationMatrix(_hm.makeBasis(J.headLeft,J.headUp,J.look));
   placeLimb(P.thighF,J.hipF,J.kneeF); placeLimb(P.thighB,J.hipB,J.kneeB); placeLimb(P.shinF,J.kneeF,J.footF); placeLimb(P.shinB,J.kneeB,J.footB);
   placeLimb(P.uarmF,J.shF,J.elF); placeLimb(P.uarmB,J.shB,J.elB); placeLimb(P.farmF,J.elF,J.handF); placeLimb(P.farmB,J.elB,J.handB);
   P.handF.position.copy(J.handF); P.handB.position.copy(J.handB);
@@ -947,7 +958,7 @@ function driveRig(dt){
   // legs: knee from a two-bone solve to the ankle in the binding, foot flat on the board
   const up=toM(UP,_r9);
   for(const [s,foot,toes,pz] of [['l',J.footF,R.toesF,0.3],['r',J.footB,R.toesB,-0.15]]){
-    const H=R.wp['thigh_'+s], A=toM(foot,_r5), K=_r6, pole=toM(_r7.set(FACING,0,pz),_r7);
+    const H=R.wp['thigh_'+s], A=toM(foot,_r5), K=_r6, pole=poseParams.rag?toM(s==='l'?J.kneePoleF:J.kneePoleB,_r7):toM(_r7.set(FACING,0,pz),_r7);
     ik2(H,A,R.leg1,R.leg2,pole,K);
     // which way the knee points: the knee's offset from the hip-ankle line
     const t=_r8.subVectors(A,H), kneeFwd=_r3.subVectors(K,H);
@@ -960,7 +971,7 @@ function driveRig(dt){
   // the grip again from the model's real shoulders and its own reach, so the arms keep the same slight bend
   const SL=R.wp.upperarm_l, SR=R.wp.upperarm_r, hq=R.holder.quaternion;
   const shLr=_r8.copy(SL).applyQuaternion(hq), shRr=_r6.copy(SR).applyQuaternion(hq);
-  placeGrip(poseParams,_r5.addVectors(shLr,shRr).multiplyScalar(0.5),shLr,shRr,SL.distanceTo(SR)/2,R.reach,R.reach);
+  if(!poseParams.rag)placeGrip(poseParams,_r5.addVectors(shLr,shRr).multiplyScalar(0.5),shLr,shRr,SL.distanceTo(SR)/2,R.reach,R.reach);
   // arms: wrist a palm's width short of the grip point, elbow toward the solver's pole, back of the hand up on the bar
   R.grip=damp(R.grip,poseParams.bail>0?0.15:1,8,dt);
   for(const [s,hand,pole] of [['l',J.handF,J.poleF],['r',J.handB,J.poleB]]){
@@ -976,6 +987,176 @@ function driveRig(dt){
     for(const fn of ['index','middle','ring','pinky','thumb']){ const ang=fn==='thumb'?THUMB_CURL:FINGER_CURL;
       for(let i=1;i<=3;i++) B[fn+'_0'+i+'_'+s].quaternion.setFromAxisAngle(R.curl[fn+'_'+s],ang[i-1]*DEG*curl); }
   }
+}
+
+// ---------- ragdoll: a bail hands the rider to a particle body that carries its speed and spin into the water ----------
+// Position-based dynamics: particles at the joints, held by distance constraints. Bones are fixed lengths; knees, elbows,
+// ankles and the spine are ranges. The board is a rigid set of particles with both boots strapped to it. The water holds
+// up whatever is under the surface by its volume (the vest floats the chest) and drags on it. The board is a flat plate:
+// it skims along its length but digs in on an edge or slaps down flat, so a board that stops dead throws the body over it.
+const RAG_PARTS=[ // name, mass kg, radius m, volume m^3, drag area m^2. Hips and legs sink; the vest and lungs float the chest.
+  ['nose',0.5,0.03,0.0014,0],['tail',0.5,0.03,0.0014,0],['toeF',0.5,0.03,0.0014,0],['heelF',0.5,0.03,0.0014,0],['toeB',0.5,0.03,0.0014,0],['heelB',0.5,0.03,0.0014,0],
+  ['footF',3,0.06,0.0032,0.02],['footB',3,0.06,0.0032,0.02],['kneeF',5,0.07,0.0052,0.04],['kneeB',5,0.07,0.0052,0.04],
+  ['hipF',9,0.1,0.009,0.08],['hipB',9,0.1,0.009,0.08],['pf',6,0.12,0.0058,0.08],
+  ['shF',7,0.1,0.0105,0.08],['shB',7,0.1,0.0105,0.08],['cf',10,0.14,0.028,0.16],['head',6,0.11,0.0075,0.05],
+  ['elF',2.5,0.05,0.0024,0.03],['elB',2.5,0.05,0.0024,0.03],['handF',1.5,0.045,0.0014,0.03],['handB',1.5,0.045,0.0014,0.03]];
+const RAG_BOARD=6;                       // the first six particles are the board
+const RAG_CD_SKIM=0.28, RAG_CD_SLAP=2.2;  // body drag skidding along the surface / slapping down into it
+const RAG_BOARD_CD={len:0.02,edge:1.0,flat:1.2}, RAG_EDGE_DEPTH=0.1; // board drag: along it, across it (the edge), through it
+const RAG_ITERS=8, RAG_SUB=2, RAG_TONE=0.04, RAG_KICK=1.6; // solver passes, substeps, how much the body holds its shape, edge-catch pitch rad/s
+const RAG_RIGHT=6, RAG_COME_TO=[0.7,1.5]; // after the slam the rider comes round: lifts head and chest, lets the hips sink (m/s^2), from..to s
+const RAG={on:false,N:RAG_PARTS.length,I:{},p:[],q:[],v:[],m:[],w:[],r:[],vol:[],A:[],wet:[],sk:[],right:[],cons:[],loc:{},
+  ex:V3(),ey:V3(),ez:V3(),org:V3(),com:V3(),vcom:V3()};
+const RAG_RIGHTW={head:1,shF:1,shB:1,cf:0.6,hipF:-1.15,hipB:-1.15,pf:-0.6};
+RAG_PARTS.forEach(([n,m,r,vol,A],i)=>{ RAG.I[n]=i; RAG.p.push(V3()); RAG.q.push(V3()); RAG.v.push(V3()); RAG.m.push(m); RAG.w.push(1/m); RAG.r.push(r); RAG.vol.push(vol); RAG.A.push(A); RAG.wet.push(0); RAG.sk.push(0); RAG.loc[n]=V3(); RAG.right.push(RAG_RIGHTW[n]||0); });
+const _rm=new THREE.Matrix4(), _rmi=new THREE.Matrix4(), _ra=V3(), _rb=V3(), _rc=V3(), _rd=V3(), _rw=V3(), _rqa=new THREE.Quaternion(), _rqb=new THREE.Quaternion(), _one=V3(1,1,1);
+// board frame from its particles: x across (local +x), y up out of the deck, z to the nose
+function ragBoardFrame(){
+  const g=RAG, P_=g.p, I=g.I;
+  g.ez.subVectors(P_[I.nose],P_[I.tail]).normalize();
+  g.ex.addVectors(P_[I.toeF],P_[I.toeB]).sub(P_[I.heelF]).sub(P_[I.heelB]).multiplyScalar(FACING);
+  g.ex.addScaledVector(g.ez,-g.ex.dot(g.ez)).normalize(); g.ey.crossVectors(g.ez,g.ex);
+  g.org.set(0,0,0); for(let i=0;i<RAG_BOARD;i++)g.org.add(P_[i]); g.org.multiplyScalar(1/RAG_BOARD).addScaledVector(g.ey,-0.02);
+}
+function ragStart(fall,vel,reason){
+  const g=RAG, I=g.I, L=g.loc, fromAir=R.state==='air';
+  if(J.sh.lengthSq()<1e-6)solvePose(poseParams); // never posed (a headless run): pose it once
+  // where every particle sits in the rider's frame right now
+  L.nose.set(0,0.02,0.68); L.tail.set(0,0.02,-0.68);
+  for(const [k,sd,z] of [['toeF',1,0.26],['heelF',-1,0.26],['toeB',1,-0.26],['heelB',-1,-0.26]]) L[k].set(FACING*sd*0.2,0.02,z);
+  for(const k of ['footF','footB','kneeF','kneeB','hipF','hipB','shF','shB','head','elF','elB','handF','handB']) L[k].copy(J[k]);
+  _ra.subVectors(J.hipF,J.hipB).normalize(); _rb.crossVectors(_ra,poseParams.axis).normalize(); L.pf.copy(J.hips).addScaledVector(_rb,0.12);
+  L.cf.copy(J.sh).addScaledVector(J.C,0.13);
+  _rm.compose(riderOrigin(R.renderQuat,_rc),R.renderQuat,_one); const boardY=_rc.y;
+  // its velocity: the rider's, plus the turn they had in the air (spin about the vertical, flip and roll about the body)
+  _rw.set(0,0,0);
+  if(fromAir){
+    _rqa.setFromAxisAngle(UP,R.spin*DEG).multiply(R.baseQuat); _rw.addScaledVector(UP,R.spinVel*DEG);
+    _rw.addScaledVector(_rc.set(1,0,0).applyQuaternion(_rqa),R.flipVel*DEG);
+    _rqa.multiply(_rqb.setFromAxisAngle(_rc.set(1,0,0),R.flip*DEG)); _rw.addScaledVector(_rc.set(0,0,1).applyQuaternion(_rqa),R.rollVel*DEG);
+  }
+  const hips=_rd.copy(J.hips).applyMatrix4(_rm);
+  for(let i=0;i<g.N;i++){
+    const p=g.p[i].copy(L[RAG_PARTS[i][0]]).applyMatrix4(_rm);
+    g.v[i].copy(vel).add(_ra.subVectors(p,hips).cross(_rw).negate()); // v + w x r
+    // a caught edge stops the board, so the body pitches over it toward the edge that dug in
+    if(fall&&fall.lengthSq()>0.01) g.v[i].addScaledVector(fall,RAG_KICK*Math.max(0,p.y-boardY));
+    g.wet[i]=1; g.sk[i]=0;
+  }
+  // a handle ripped out of the hands yanks them toward the boat
+  if(reason==='Lost the handle'){ _ra.copy(pylonPos()).sub(g.p[I.handF]).normalize();
+    for(const [k,s] of [['handF',4],['handB',4],['elF',2.5],['elB',2.5],['shF',1.2],['shB',1.2],['cf',0.8]]) g.v[I[k]].addScaledVector(_ra,s); }
+  // constraints: [i, j, shortest, longest, rest, tone]
+  const C=g.cons; C.length=0;
+  const d=(a,b)=>g.p[I[a]].distanceTo(g.p[I[b]]);
+  const fix=(a,b,len)=>{ const r=len==null?d(a,b):len; C.push([I[a],I[b],r,r,r,0]); };
+  const range=(a,b,lo,hi,tone)=>{ const r=d(a,b); C.push([I[a],I[b],r*lo,r*hi,r,tone||0]); };
+  const apart=(a,b,lo)=>C.push([I[a],I[b],lo,1e9,lo,0]);
+  const brd=['nose','tail','toeF','heelF','toeB','heelB','footF','footB'];
+  for(let i=0;i<brd.length;i++)for(let j=i+1;j<brd.length;j++)fix(brd[i],brd[j]);       // board and boots: one rigid piece
+  fix('hipF','hipB'); fix('hipF','pf'); fix('hipB','pf');                                  // pelvis
+  for(const [a,b] of [['shF','shB'],['shF','cf'],['shB','cf'],['shF','head'],['shB','head'],['cf','head']])fix(a,b); // chest and head
+  range('hipF','shF',0.82,1.05,RAG_TONE); range('hipB','shB',0.82,1.05,RAG_TONE);         // spine: bends and twists, within limits
+  range('hipF','shB',0.85,1.08,RAG_TONE); range('hipB','shF',0.85,1.08,RAG_TONE);
+  range('pf','cf',0.6,1.08,RAG_TONE); range('pf','shF',0.8,1.1); range('pf','shB',0.8,1.1); range('hipF','cf',0.7,1.08); range('hipB','cf',0.7,1.08);
+  const arm1=RIG.ready?RIG.arm1:0.29, arm2=RIG.ready?RIG.arm2:0.28;
+  for(const s of ['F','B']){
+    fix('hip'+s,'knee'+s,LEG); fix('knee'+s,'foot'+s,LEG);
+    C.push([I['hip'+s],I['foot'+s],0.32,2*LEG*0.995,0,0]);                                  // knee: from folded to straight
+    apart('knee'+s,'pf',0.22); C.push([I['knee'+s],I['sh'+s],0,0.5+LEG+0.06,0,0]);         // thigh: not into the belly, not far behind
+    // ankle: the boot lets the shin tip about 40 degrees toward the toes or the heels, and holds the board's roll
+    const foot=L['foot'+s], knee=L['knee'+s], shin=Math.sqrt(Math.max(0.01,LEG*LEG-(knee.z-foot.z)**2));
+    for(const e of ['toe','heel']){ const edge=L[e+s], ds=[d('knee'+s,e+s)];
+      for(const a of [-40,40]){ _ra.set(foot.x+FACING*shin*Math.sin(a*DEG),foot.y+shin*Math.cos(a*DEG),knee.z); ds.push(_ra.distanceTo(edge)); }
+      C.push([I['knee'+s],I[e+s],Math.min(...ds),Math.max(...ds),0,0]); }
+    fix('sh'+s,'el'+s,arm1); fix('el'+s,'hand'+s,arm2);
+    C.push([I['sh'+s],I['hand'+s],0.12,arm1+arm2,0,0]);                                     // elbow: folded to straight
+    apart('hand'+s,'cf',0.12); apart('hand'+s,'pf',0.12); apart('el'+s,'cf',0.1);
+  }
+  apart('kneeF','kneeB',0.14);
+  ragBoardFrame();                                                                        // the knee rule needs this board's toe side
+  for(let k=0;k<12;k++)ragSolve();                                                        // settle the pose onto the constraints
+  ragBoardFrame(); ragCom(); g.on=true;
+}
+function ragSolve(){
+  const g=RAG, P_=g.p, W=g.w;
+  for(const c of g.cons){
+    const a=P_[c[0]], b=P_[c[1]]; _rd.subVectors(b,a); const L=_rd.length(); if(L<1e-9)continue;
+    let t; if(L<c[2])t=c[2]; else if(L>c[3])t=c[3]; else if(c[5]>0)t=L+(c[4]-L)*c[5]; else continue;
+    const wa=W[c[0]], wb=W[c[1]], k=(L-t)/(L*(wa+wb));
+    a.addScaledVector(_rd,wa*k); b.addScaledVector(_rd,-wb*k);
+  }
+  // knees bend toward the toes, never backward
+  const I=g.I; _rc.copy(g.ex).multiplyScalar(FACING);
+  for(const s of ['F','B']){
+    const h=P_[I['hip'+s]], k=P_[I['knee'+s]], f=P_[I['foot'+s]];
+    _ra.subVectors(f,h); const l2=_ra.lengthSq(); if(l2<1e-6)continue;
+    _rb.subVectors(k,h); _rb.addScaledVector(_ra,-_rb.dot(_ra)/l2);
+    const o=_rb.dot(_rc); if(o<0.03)k.addScaledVector(_rc,0.03-o);
+  }
+}
+function ragSplash(p,v,k){
+  const n=Math.round(3+k*14);
+  for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2, r=Math.random();
+    spray.emit(p.x+Math.cos(a)*r*0.25,p.y+0.03,p.z+Math.sin(a)*r*0.25, v.x*0.35+Math.cos(a)*r*3*k,0.6+(1+Math.random()*3.5)*k,v.z*0.35+Math.sin(a)*r*3*k, 0.35+Math.random()*0.5,0.05+Math.random()*0.2*k); }
+}
+function ragStep(dt){
+  const g=RAG, n=g.N, h=dt/RAG_SUB, RHO=1000, come=smoothstep(RAG_COME_TO[0],RAG_COME_TO[1],R.bailT);
+  for(let sub=0;sub<RAG_SUB;sub++){
+    ragBoardFrame();
+    for(let i=0;i<n;i++){
+      const p=g.p[i], v=g.v[i], r=g.r[i], m=g.m[i];
+      const f=clamp((waterAt(p.x,p.z,boatZ,simTime)-(p.y-r))/(2*r),0,1);
+      v.y-=G*h;
+      if(f>0){
+        v.y+=RHO*g.vol[i]*f*G/m*h;                                    // floats by the water it displaces
+        if(come>0){ const a=g.right[i]; if(a)v.y+=a*come*RAG_RIGHT*h; } // sitting up in the water to wait for the boat
+        if(i<RAG_BOARD){
+          // the board plate: little drag along it, the edge digging in across it, a slap through it (all implicit, so stable)
+          const k=0.5*RHO*f/m*h, A=0.59/RAG_BOARD;
+          const vl=v.dot(g.ez), vw=v.dot(g.ex), vn=v.dot(g.ey);
+          const l2=vl/(1+k*RAG_BOARD_CD.len*A*Math.abs(vl)), w2=vw/(1+k*RAG_BOARD_CD.edge*(1.4*RAG_EDGE_DEPTH/RAG_BOARD)*Math.abs(vw)), n2=vn/(1+k*RAG_BOARD_CD.flat*A*Math.abs(vn));
+          v.copy(g.ez).multiplyScalar(l2).addScaledVector(g.ex,w2).addScaledVector(g.ey,n2);
+        } else {
+          // the body: skids along the surface, and takes a hard slap going down into it
+          const k=0.5*RHO*g.A[i]*f/m*h, sh=Math.hypot(v.x,v.z), fh=1/(1+k*RAG_CD_SKIM*sh);
+          v.x*=fh; v.z*=fh; if(v.y<0)v.y/=1+k*RAG_CD_SLAP*Math.abs(v.y); else v.y/=1+k*RAG_CD_SKIM*v.y;
+        }
+        v.multiplyScalar(1/(1+1.5*f*h));                                 // and settles once it's floating
+        // spray: a burst where a part hits the water, a stream while it skids across it
+        const sp=v.length();
+        if(g.wet[i]===0 && sp>2.5) ragSplash(p,v,clamp(sp/9,0.2,1)*Math.min(1,m/5+0.3));
+        if(sp>3){ g.sk[i]+=h*sp*Math.sqrt(m)*1.2; while(g.sk[i]>1){ g.sk[i]-=1; spray.emit(p.x,p.y+0.04,p.z,v.x*0.5+(Math.random()-0.5)*2,0.8+Math.random()*2.2,v.z*0.5+(Math.random()-0.5)*2,0.3+Math.random()*0.4,0.05+Math.random()*0.12); } }
+      }
+      g.wet[i]=f;
+      g.q[i].copy(p); p.addScaledVector(v,h);
+    }
+    for(let it=0;it<RAG_ITERS;it++)ragSolve();
+    for(let i=0;i<n;i++)g.v[i].subVectors(g.p[i],g.q[i]).multiplyScalar(1/h);
+  }
+  ragCom();
+}
+function ragCom(){
+  const g=RAG; let M=0; g.com.set(0,0,0); g.vcom.set(0,0,0);
+  for(let i=RAG_BOARD;i<g.N;i++){ g.com.addScaledVector(g.p[i],g.m[i]); g.vcom.addScaledVector(g.v[i],g.m[i]); M+=g.m[i]; }
+  g.com.multiplyScalar(1/M); g.vcom.multiplyScalar(1/M);
+}
+// the ragdoll's particles back into the rider's frame, as the joints the rig and the primitive rider are posed from
+function ragToPose(){
+  const g=RAG, I=g.I, at=(k,out)=>out.copy(g.p[I[k]]).applyMatrix4(_rmi);
+  rider.updateMatrixWorld(true); _rmi.copy(rider.matrixWorld).invert();
+  for(const k of ['hipF','hipB','kneeF','kneeB','shF','shB','elF','elB','handF','handB','head'])at(k,J[k]);
+  J.hips.addVectors(J.hipF,J.hipB).multiplyScalar(0.5); J.sh.addVectors(J.shF,J.shB).multiplyScalar(0.5);
+  // pelvis: up from its left-right line and the belly; chest the same from the shoulders and the front of the vest
+  at('pf',_ra); _rb.subVectors(J.hipF,J.hipB).normalize(); _ra.sub(J.hips).addScaledVector(_rb,-_ra.dot(_rb)).normalize(); poseParams.axis.crossVectors(_ra,_rb).normalize();
+  at('cf',_ra); J.axis.subVectors(J.shF,J.shB).normalize(); J.C.subVectors(_ra,J.sh);
+  J.C.addScaledVector(J.axis,-J.C.dot(J.axis)).normalize(); J.torsoDir.crossVectors(J.C,J.axis).normalize();
+  J.headUp.subVectors(J.head,J.sh).normalize(); J.look.copy(J.C).addScaledVector(J.headUp,-J.C.dot(J.headUp)-0.3).normalize(); J.headLeft.crossVectors(J.headUp,J.look).normalize();
+  // elbows and knees point the way the ragdoll bent them
+  for(const [el,sh,hd,pole] of [[J.elF,J.shF,J.handF,J.poleF],[J.elB,J.shB,J.handB,J.poleB],[J.kneeF,J.hipF,J.footF,J.kneePoleF],[J.kneeB,J.hipB,J.footB,J.kneePoleB]]){
+    _ra.addVectors(sh,hd).multiplyScalar(0.5); _rb.subVectors(el,_ra); if(_rb.lengthSq()>1e-6)pole.copy(_rb).normalize(); }
+  J.holdF=J.holdB=0; J.handle.copy(poseParams.handle); J.handleAxis.copy(poseParams.handleAxis);
+  placeParts();
 }
 
 // ---------- particles ----------
@@ -1024,7 +1205,6 @@ const R={
   vySurf:0, airT:0, bailT:0, maxH:0, takeoffU:0, takeoffWake:false, takeoffYaw:0,
   grabs:{Indy:0,Melon:0,Nose:0,Tail:0}, grabHeld:{Indy:false,Melon:false,Nose:false,Tail:false}, grabVis:{Indy:0,Melon:0,Nose:0,Tail:0},
   nrm:V3(0,1,0), fw:V3(0,G,0), crouch:0.3, landComp:0, quat:new THREE.Quaternion(), baseQuat:new THREE.Quaternion(), renderQuat:new THREE.Quaternion(),
-  tumble:new THREE.Quaternion(), tumbleAxis:V3(0,1,0), tumbleLeft:0,
   L:{spin:0,flip:0,roll:0}, charge:{spin:0,flip:0,roll:0}, chargeDir:{spin:0,flip:0,roll:0}, chargeT:{spin:0,flip:0,roll:0}, shape:0.45, rotPower:1, lastLanding:null,
 };
 const SESSION={score:0,best:0,bestName:'none yet',falls:0};
@@ -1045,7 +1225,7 @@ function resetRider(){
   R.steer=0; R.spin=R.flip=R.roll=0; R.spinVel=R.flipVel=R.rollVel=0; R.switchStance=false; R.travelYaw=0; R.boardYaw=0;
   R.load=0; R.loading=false; R.popRequest=false; R.airT=0; R.vySurf=0; R.bailT=0; R.landComp=0; R.tension=0; R.overload=0; R.popArm=0; R.popT=0;
   for(const k in R.grabs)R.grabs[k]=0;
-  R.renderQuat.identity(); R.baseQuat.identity();
+  R.renderQuat.identity(); R.baseQuat.identity(); RAG.on=false;
   R.fw.set(0,G,0); poseParams.axis.copy(UP); poseParams.axisVel.set(0,0,0); cam.trauma=0;
 }
 function takeoff(vy,popped){
@@ -1061,10 +1241,8 @@ function takeoff(vy,popped){
 function stepRider(dt){
   const pyl=pylonPos();
   if(R.state==='bail'){
-    R.bailT+=dt; R.vel.x*=Math.exp(-2.5*dt); R.vel.z=lerp(R.vel.z,0,1-Math.exp(-2.5*dt)); R.vel.y-=G*dt;
-    R.pos.x+=R.vel.x*dt; R.pos.z+=R.vel.z*dt; R.pos.y+=R.vel.y*dt;
-    const h=waterAt(R.pos.x,R.pos.z,boatZ,simTime)-0.18; if(R.pos.y<h){R.pos.y=h;R.vel.y*=-0.15;} // the vest floats the rider at the surface
-    if(R.bailT>2.4 && !fade.active){fadeOut(()=>resetRider());}
+    R.bailT+=dt; ragStep(dt); R.pos.copy(RAG.com); R.vel.copy(RAG.vcom); // the camera follows the body
+    if(R.bailT>2.6 && !fade.active){fadeOut(()=>resetRider());}
     return;
   }
   if(R.state==='riding'){
@@ -1132,12 +1310,31 @@ function stepRider(dt){
       R[k]=ang; R[k+'Vel']=vel;
     }
     for(const k in R.grabs){ if(R.grabHeld[k])R.grabs[k]+=dt; else if(R.grabs[k]>0 && R.grabs[k]<0.18)R.grabs[k]=0; }
-    if(R.airT>0.08 && R.pos.y<=hGround && R.vel.y<0) land(hGround);
+    // where the board really is: the body turns about its centre of mass, so a trick swings the board round it
+    airQuat(_aq); riderOrigin(_aq,_brd);
+    // an invert that comes round short (or long) puts the head or back in before the board
+    if(R.airT>0.15 && (Math.abs(R.flip)>45||Math.abs(R.roll)>45)){
+      const com=_ax2.set(0,COM_H,0).applyQuaternion(R.baseQuat).add(R.pos);
+      _ax1.set(0,lerp(0.72,0.45,R.shape),0).applyQuaternion(_aq).add(com); // the head, closer in when tucked
+      if(_ax1.y<waterAt(_ax1.x,_ax1.z,boatZ,simTime) || com.y-0.15<waterAt(com.x,com.z,boatZ,simTime)){ headFirst(); return; }
+    }
+    const hBoard=waterAt(_brd.x,_brd.z,boatZ,simTime);
+    if(R.airT>0.08 && _brd.y<=hBoard && R.vel.y<0){ R.pos.copy(_brd); land(hBoard); } // back on the water where the board is
   }
 }
+const _aq=new THREE.Quaternion(), _ax1=V3(), _ax2=V3(), _brd=V3();
+const overUnder=(a,n)=>n===0||Math.abs(a)<Math.abs(n)?'Under':'Over'; // nearest whole turn is none: it never got round
+function headFirst(){
+  const flipN=Math.round(R.flip/360)*360, rollN=Math.round(R.roll/360)*360;
+  const reason=Math.abs(R.flip-flipN)>=Math.abs(R.roll-rollN)
+    ? `${overUnder(R.flip,flipN)}-rotated the ${R.flip<0?'backroll':'front roll'}`
+    : `${overUnder(R.roll,rollN)}-rotated the ${R.roll<0?'tantrum':'front flip'}`;
+  R.lastLanding=null; bail(reason,null,_impact.copy(R.vel));
+}
 const SPIN_PTS={180:150,360:450,540:900,720:1600,900:2600,1080:4000,1260:6000};
-const _ln=V3(), _toe=V3();
+const _ln=V3(), _toe=V3(), _impact=V3();
 function land(h){
+  _impact.copy(R.vel);
   // speed into the water surface, measured against the wake (it travels with the boat): a downslope landing is soft
   surfaceNormal(R.pos.x,R.pos.z,boatZ,simTime,_ln);
   const vn=Math.max(0,-(R.vel.x*_ln.x+R.vel.y*_ln.y+(R.vel.z-BOAT_SPEED)*_ln.z));
@@ -1154,7 +1351,7 @@ function land(h){
   _toe.set(FACING,0,0).applyQuaternion(R.quat); _toe.y=0; _toe.normalize();
   const toeLeads=R.vel.x*_toe.x+R.vel.z*_toe.z>0;
   let fail=null, fall=null;
-  const short=(a,n)=>Math.abs(a)<Math.abs(n)?'Under':'Over';
+  const short=overUnder;
   if(flipErr>60){ fail=`${short(R.flip,flipN)}-rotated the ${R.flip<0?'backroll':'front roll'}`; fall=V3(R.vel.x,0,R.vel.z).normalize(); }
   else if(rollErr>60){ fail=`${short(R.roll,rollN)}-rotated the ${R.roll<0?'tantrum':'front flip'}`; fall=V3().copy(_toe).multiplyScalar(toeLeads?1:-1); }
   else if(spinErr>45){
@@ -1163,7 +1360,7 @@ function land(h){
   }
   else if(vn>7.5){ fail=inside?'Cased the second wake':'Too much heat into the flats'; fall=V3(R.vel.x,0,R.vel.z).normalize(); }
   const halfTurns=Math.round(R.spin/180);
-  if(fail){ bail(fail,fall); return; }
+  if(fail){ bail(fail,fall,_impact); return; }
   if(halfTurns%2!==0)R.switchStance=!R.switchStance;
   R.state='riding'; R.steer=0; R.vySurf=0; R.landComp=clamp(vn/6,0.15,1);
   // a hard or sideways landing scrubs speed
@@ -1205,13 +1402,10 @@ function scoreTrick(t){
   showTrick(name,`+${pts.toLocaleString()}`,sub.join(' · '),false);
   updateSessionHUD();
 }
-function bail(reason,fall){
+function bail(reason,fall,vel){
+  ragStart(fall,vel||R.vel,reason); // the ragdoll takes over from the pose, with the rider's speed and spin
   R.state='bail'; R.bailT=0; SESSION.falls++; cam.trauma=Math.min(1,cam.trauma+0.6); R.tension=0; R.overload=0;
-  // pitch over in the direction the crash throws the rider (a turn about the axis across that direction), then float
-  if(fall && fall.lengthSq()>0.01){ R.tumbleAxis.crossVectors(UP,fall).normalize(); R.tumbleLeft=1.9; }
-  else { R.tumbleAxis.set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).normalize(); R.tumbleLeft=2.4; }
-  R.vel.y=Math.max(R.vel.y,0.5); R.vel.x*=0.6;
-  sprayBurst(R.pos,110,1.4); if(AC)playSplash(1.0);
+  sprayBurst(R.pos,40,1.0); if(AC)playSplash(1.0);
   showTrick(reason,'','No Risk, No Story. The boat\'s coming round.',true);
   updateSessionHUD();
 }
@@ -1220,7 +1414,7 @@ function sprayBurst(p,n,power){n=Math.round(n*2.2);for(let i=0;i<n;i++){const a=
 // ---------- visuals per frame ----------
 const _tiltQ=new THREE.Quaternion(),_yawQ=new THREE.Quaternion(),_tmpQ=new THREE.Quaternion(),_e=new THREE.Euler();
 const handleW=V3(),handleAxisW=V3(),_v=V3(),_v2=V3(),_invQ=new THREE.Quaternion();
-const poseParams={crouch:0.3,twist:0.85,pull:0,axis:V3(0,1,0),axisVel:V3(),armReach:0.57*0.96,pylon:V3(),up:V3(0,1,0),look:V3(),handle:V3(),handleAxis:V3(0,0,1),handleFree:false,grabs:R.grabVis,bail:0};
+const poseParams={rag:false,crouch:0.3,twist:0.85,pull:0,axis:V3(0,1,0),axisVel:V3(),armReach:0.57*0.96,pylon:V3(),up:V3(0,1,0),look:V3(),handle:V3(),handleAxis:V3(0,0,1),handleFree:false,grabs:R.grabVis,bail:0};
 const LEAN_MAX=55*DEG, BODY_W=9, BODY_Z=0.75; // how far a rider can hang off the board, and how quickly the body follows the forces
 function updateRiderVisual(dt){
   rider.position.copy(R.pos);
@@ -1238,13 +1432,11 @@ function updateRiderVisual(dt){
     _tmpQ.setFromAxisAngle(UP,R.spin*DEG); R.quat.copy(_tmpQ).multiply(R.baseQuat);
     _tmpQ.setFromAxisAngle(V3(1,0,0),R.flip*DEG); R.quat.multiply(_tmpQ);
     _tmpQ.setFromAxisAngle(V3(0,0,1),R.roll*DEG); R.quat.multiply(_tmpQ);
-    R.renderQuat.copy(R.quat);
-  } else {
-    const da=Math.min(R.tumbleLeft,dt*6); R.tumbleLeft-=da; _tmpQ.setFromAxisAngle(R.tumbleAxis,da); R.renderQuat.premultiply(_tmpQ);
+    R.renderQuat.copy(R.quat); riderOrigin(R.quat,rider.position);
+  } else if(RAG.on){ // a bail: the rider's frame is the ragdoll's board
+    ragBoardFrame(); rider.position.copy(RAG.org); R.renderQuat.setFromRotationMatrix(_hm.makeBasis(RAG.ex,RAG.ey,RAG.ez));
   }
   rider.quaternion.copy(R.renderQuat);
-  // the vest floats the chest at the surface: as the body goes over, the feet (the rider's origin) rise with the board
-  if(R.state==='bail'){ _v.set(0,1,0).applyQuaternion(R.renderQuat); rider.position.y=Math.max(R.pos.y,waterAt(R.pos.x,R.pos.z,boatZ,simTime)-0.15-1.1*_v.y); }
   rider.updateMatrixWorld(true); _invQ.copy(rider.quaternion).invert();
   const pyl=pylonPos();
   // body line: on the water it follows the force the water puts on the board (see stepRider), which is what makes
@@ -1279,7 +1471,8 @@ function updateRiderVisual(dt){
   const rotating=R.state==='air'&&(Math.abs(R.spinVel)>90||Math.abs(R.flipVel)>90||Math.abs(R.rollVel)>90||off(R.spin,360)>20||off(R.flip,360)>20||off(R.roll,360)>20);
   poseParams.pull=damp(poseParams.pull,rotating?1:0,rotating?12:4,dt);
   poseParams.bail=R.state==='bail'?R.bailT:0;
-  solvePose(poseParams);
+  poseParams.rag=R.state==='bail'&&RAG.on;
+  if(poseParams.rag)ragToPose(); else solvePose(poseParams);
   if(RIG.ready)driveRig(dt);
   // handle and rope follow the hands
   rider.localToWorld(handleW.copy(J.handle)); handleAxisW.copy(J.handleAxis).applyQuaternion(rider.quaternion).normalize();
