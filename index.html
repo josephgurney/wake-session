@@ -1679,9 +1679,11 @@ function updateCamera(dt,snap){
 // Mix: engine -> engineBus, spray/wash/wind/splashes -> fxBus, both -> master (M mutes it) -> a limiter, so
 // turning everything up in Settings can't clip. The music is the SoundCloud widget's own volume (djVolume).
 let AC=null,master,engineBus,fxBus,engineGain,engineOsc,sprayGain,windGain,washGain;
-// Settings volumes are 0-100. 75 is the game's original mix; the taper is squared so the slider feels even to the
-// ear: 100 is about 5 dB louder, 50 about 7 dB quieter, 0 silent.
-const SOUND_KEY='tyc-sound', SOUND_DEF={music:75,engine:75,fx:75};
+// Settings volumes are 0-100. 75 plays a sound at its level in the original mix; the taper is squared so the slider
+// feels even to the ear: 100 is about 5 dB louder, 50 about 7 dB quieter, 0 silent. The boat starts down at 30.
+// Only the sliders the player has moved are saved, so a later change to a default still reaches everyone else.
+// (The key moved on from 'tyc-sound', which saved every slider, including the boat at its old default of 75.)
+const SOUND_KEY='tyc-sound-2', SOUND_DEF={music:75,engine:30,fx:75};
 const sound=Object.assign({},SOUND_DEF);
 try{ const saved=JSON.parse(localStorage.getItem(SOUND_KEY)||'{}'); for(const k in SOUND_DEF){ const v=Number(saved[k]); if(saved[k]!=null && Number.isFinite(v))sound[k]=clamp(Math.round(v),0,100); } }catch(_){}
 const soundLevel=v=>Math.pow(v/75,2);
@@ -1839,7 +1841,10 @@ for(const k of Object.keys(SOUND_DEF)){
     // the effects have nothing playing while the ride is paused, so a splash lets you hear the new level
     if(k==='fx' && performance.now()-fxPreviewT>250){ fxPreviewT=performance.now(); playSplash(0.6); }
   });
-  input.addEventListener('change',()=>{ try{ localStorage.setItem(SOUND_KEY,JSON.stringify(sound)); }catch(_){} });
+  input.addEventListener('change',()=>{
+    const moved={}; for(const j in SOUND_DEF)if(sound[j]!==SOUND_DEF[j])moved[j]=sound[j];
+    try{ localStorage.setItem(SOUND_KEY,JSON.stringify(moved)); }catch(_){}
+  });
 }
 document.getElementById('vol-mute').addEventListener('change',e=>setMuted(e.target.checked));
 function openSettings(){
