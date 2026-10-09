@@ -1,4 +1,4 @@
-# Wake Session
+# Thursday Yacht Club
 
 A browser wakeboarding sim in the spirit of EA Skate. You ride a 65 ft line behind a boat holding 21 mph, carve out wide, edge back into the wake, pop off the lip and land spins, rolls and grabs. One HTML file, no build step.
 

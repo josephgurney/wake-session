@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Wake Session</title>
+<title>Thursday Yacht Club</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&family=DM+Sans:wght@400;500&display=swap">
 <style>
@@ -45,7 +45,7 @@ body{padding:0}
 #start.hide{opacity:0;pointer-events:none}
 .card{margin:auto;max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:28px 30px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .card h1{font-family:var(--display);font-weight:800;font-size:clamp(44px,9vw,84px);line-height:.92;margin:0;letter-spacing:.01em;text-transform:uppercase}
-.card h1 em{font-style:normal;color:var(--accent)}
+.card h1 em{font-style:normal;color:var(--accent);white-space:nowrap}
 .card p{margin:12px 0 0;color:var(--ink-dim);line-height:1.55;max-width:60ch}
 .card .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;margin-top:18px;font-size:13px}
 .card .grid div{display:flex;justify-content:space-between;gap:10px;align-items:center;min-width:0}
@@ -129,7 +129,7 @@ body.touch .card .grid.tc{display:grid}
   <div id="fade"></div>
   <div id="start">
     <div class="card">
-      <h1>Wake <em>Session</em></h1>
+      <h1>Thursday <em>Yacht Club</em></h1>
       <p>Boat is set at 21 mph on a 65 ft line. Cut out wide, then edge hard back into the wake. Hold <kbd>Space</kbd> on the way in to load the line and let go at the lip to pop. Clear both wakes for the wake-to-wake bonus. Rotation is set at the lip: tap a direction for a 180, hold it longer to wind up more, then keep pushing to tuck and turn faster or push back to open up and slow down. Over- or under-rotate and you catch an edge.</p>
       <div class="grid kb">
         <div><span><kbd>←</kbd> <kbd>→</kbd></span><span>heelside / toeside edge · spin off the lip (tap for 180, hold to wind up more)</span></div>
@@ -162,7 +162,7 @@ body.touch .card .grid.tc{display:grid}
 <script>
 'use strict';
 /* =====================================================================
-   WAKE SESSION — a wakeboarding sim in a single file.
+   THURSDAY YACHT CLUB — a wakeboarding sim in a single file.
    Physics: rider is a point mass on an inelastic tow rope behind a boat
    moving at constant speed. On the water the board acts like a keel:
    lateral slip is resisted (grip scales with edge angle), forward drag

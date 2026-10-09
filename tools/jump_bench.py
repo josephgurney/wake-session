@@ -1,4 +1,4 @@
-"""Jump test bench for Wake Session.
+"""Jump test bench for Thursday Yacht Club.
 
 Runs the game's own physics (index.html, in headless Chromium) through a set of scripted wake jumps, checks the
 results against real-world targets, and draws the jump arcs over the wake so you can tune by eye.

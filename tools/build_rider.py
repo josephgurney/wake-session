@@ -1,4 +1,4 @@
-"""Build the Wake Session rider from the MakeHuman base body (CC0), with plain Python and numpy.
+"""Build the Thursday Yacht Club rider from the MakeHuman base body (CC0), with plain Python and numpy.
 
     git clone --depth 1 https://github.com/makehumancommunity/mpfb2 ../mpfb2
     python tools/build_rider.py --mpfb ../mpfb2          # writes assets/rider.glb and assets/rider.js
