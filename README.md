@@ -24,7 +24,7 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 | `Q` `E` / right stick left/right | | tantrum / front flip |
 | `A` `D` / LB RB | | melon / indy grab |
 | `W` `S` / LT RT | | nose / tail grab |
-| `V` | follow cam / tower cam | |
+| `V` | cycle cameras: follow, long lens, boat tower | |
 | `P` | cycle quality: high, medium, low, auto | |
 | `R` | reset behind the boat | |
 | `M` | mute | |
@@ -38,7 +38,8 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 - **Shoreline** sits 76 m either side of the course: sand, grass and a few thousand instanced trees, built three periods long so the whole bank snaps forward seamlessly as the boat travels. Hazy ridges close the horizon.
 - **Rope** is an inelastic constraint to the tower pylon. Cutting out and releasing gives the real pendulum effect, so a progressive edge into the wake builds speed past the boat.
 - **Takeoff** happens when the ramp falls away faster than gravity can follow. Air height comes from how hard you edge in; a well-timed pop adds to it.
-- **Rider** is a small IK rig (knees, elbows, handle pass, grabs reach the actual edge). The board edges and tilts to the surface normal.
+- **Rider** is a small IK rig posed from the physics. The body leans along the force the water puts on the board, so it hangs back against the rope and tips into a cut, and it is sprung rather than snapped so it carries weight. The handle sits low at the front hip, the legs soak up a wake face and extend as it drops away, grabs fold the body at the waist, and the head watches the boat or the landing. The board edges and tilts to the surface normal.
+- **Cameras**: a close follow cam, a long-lens chase from about 24 m back (the compressed look of wake films), and the boat's tower. Hard landings and falls jolt the camera unless the system asks for reduced motion.
 - **Landing** checks rotation against the nearest 180 or 360, impact speed, and whether you cased the second wake. A gentle assist helps only when you are already within 45° of clean.
 - **Scoring** names tricks properly (Mobe, Scarecrow, Whirlybird, Backroll to Blind, wake-to-wake bonuses) and multiplies for clean landings.
 - **Performance** scales automatically: water mesh density, render resolution, shader detail, reflection resolution, bloom, shadow map size and tree density step down when frames run long and back up with headroom. Low quality drops the reflection pass and uses the analytic sky instead.

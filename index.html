@@ -723,45 +723,72 @@ const P={}; // parts
   for(const k of ['thighF','thighB','shinF','shinB','uarmF','uarmB','farmF','farmB','handF','handB','shJF','shJB','elJF','elJB','kneeF','kneeB','bootF','bootB'])rider.add(P[k]);
   rider.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
 }
-const handle=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.46,8),mat(0x111111,{roughness:0.5})); handle.geometry.rotateZ(Math.PI/2); scene.add(handle);
+const handle=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.36,8),mat(0x111111,{roughness:0.5})); handle.geometry.rotateZ(Math.PI/2); scene.add(handle);
 const ropeSegs=[]; {const m=mat(0xe8e4d8,{roughness:0.9});for(let i=0;i<16;i++){const s=new THREE.Mesh(new THREE.CylinderGeometry(0.011,0.011,1,5),m);scene.add(s);ropeSegs.push(s);}}
 
-// joints
-const J={hips:V3(),hipF:V3(),hipB:V3(),kneeF:V3(),kneeB:V3(),footF:V3(0,0.07,0.26),footB:V3(0,0.07,-0.26),sh:V3(),shF:V3(),shB:V3(),elF:V3(),elB:V3(),handF:V3(),handB:V3(),head:V3(),C:V3(),torsoDir:V3(),axis:V3()};
+// joints, all in rider space: board along z (nose +z), chest facing -x, feet locked in the bindings
+const J={hips:V3(),hipF:V3(),hipB:V3(),kneeF:V3(),kneeB:V3(),footF:V3(0,0.07,0.26),footB:V3(0,0.07,-0.26),sh:V3(),shF:V3(),shB:V3(),elF:V3(),elB:V3(),handF:V3(),handB:V3(),head:V3(),C:V3(),torsoDir:V3(),axis:V3(),handle:V3(),handleAxis:V3(),look:V3()};
 const FACING=-1; // regular stance: chest faces local -x
-const _b=V3();
+const LEG=0.47, BOARD_C=V3(0,0.07,0);
+// where each grab takes hold of the board: indy/tail with the back hand, melon/nose with the front
+const GRAB_PT={Indy:V3(FACING*0.22,0.05,-0.08),Tail:V3(0,0.05,-0.67),Melon:V3(-FACING*0.22,0.05,0.08),Nose:V3(0,0.05,0.67)};
+const _b=V3(), _pt=V3(), _pd=V3(), _hx=V3(), _hy=V3(), _hm=new THREE.Matrix4();
 function solvePose(p){
-  const hipY=0.98-0.38*p.crouch;
-  J.hips.set(FACING*(0.03+0.13*p.crouch),hipY,0);
+  const c=p.crouch, B=p.axis;
+  // Hips sit on the line from the board to the centre of mass (p.axis), dropping and sitting back as the knees bend.
+  J.hips.copy(BOARD_C).addScaledVector(B,0.93-0.40*c); J.hips.x-=FACING*0.07*c;
+  // a deep lean would pull the front foot out of its binding: slide the hips back within reach of both feet
+  for(let k=0;k<2;k++)for(const s of [1,-1]){
+    const foot=s>0?J.footF:J.footB; _pd.copy(foot).sub(J.hips); _pd.z-=s*0.11;
+    const L=_pd.length(), max=2*LEG*0.985; if(L>max)J.hips.addScaledVector(_pd,1-max/L);
+  }
   J.hipF.copy(J.hips); J.hipF.z+=0.11; J.hipB.copy(J.hips); J.hipB.z-=0.11;
-  const pole=V3(FACING,0,0);
-  ik2(J.hipF,J.footF,0.47,0.47,pole,J.kneeF); ik2(J.hipB,J.footB,0.47,0.47,pole,J.kneeB);
-  const hDir=V3().copy(p.handle).sub(J.hips); hDir.y=0; if(hDir.lengthSq()<1e-4)hDir.set(0,0,1); hDir.normalize();
+  ik2(J.hipF,J.footF,LEG,LEG,_pt.set(FACING,0,0.3),J.kneeF); ik2(J.hipB,J.footB,LEG,LEG,_pt.set(FACING,0,-0.15),J.kneeB);
+  // toward the tow point, from the hips
+  const toPyl=_pd.copy(p.pylon).sub(J.hips).normalize();
+  const hDir=V3(toPyl.x,0,toPyl.z); if(hDir.lengthSq()<1e-4)hDir.set(0,0,1); hDir.normalize();
+  // chest opens a little toward the boat; the torso follows the body line, folding slightly over the toes as the knees bend
   const C=J.C.set(FACING,0,0).multiplyScalar(1-p.twist).addScaledVector(hDir,p.twist).normalize();
-  const torsoDir=J.torsoDir.set(0,1,0).addScaledVector(hDir,-p.lean);
+  const torsoDir=J.torsoDir.copy(B).addScaledVector(C,0.08+0.22*c);
+  // a grab folds the body at the waist toward the hand's target on the board
+  const g=p.grabs; let gw=0; _pt.set(0,0,0);
+  for(const k in GRAB_PT){ const w=clamp(g[k],0,1); if(w>0){ gw=Math.max(gw,w); _pt.addScaledVector(GRAB_PT[k],w); } }
+  if(gw>0){ _pt.sub(J.hips); _pt.y=0; if(_pt.lengthSq()>1e-4)torsoDir.addScaledVector(_pt.normalize(),0.6*gw); torsoDir.addScaledVector(C,0.35*gw); }
   if(p.bail>0){torsoDir.x+=Math.sin(p.bail*9)*0.6;torsoDir.z+=Math.cos(p.bail*7)*0.6;}
   torsoDir.normalize();
   J.sh.copy(J.hips).addScaledVector(torsoDir,0.5);
-  const axis=J.axis.crossVectors(UP,C).normalize(); if(axis.z<0)axis.negate();
+  const axis=J.axis.crossVectors(torsoDir,C).normalize(); if(axis.z<0)axis.negate();
   J.shF.copy(J.sh).addScaledVector(axis,0.19); J.shB.copy(J.sh).addScaledVector(axis,-0.19);
   J.head.copy(J.sh).addScaledVector(torsoDir,0.21).addScaledVector(C,0.03);
-  const hA=p.handleAxis; const sgn=hA.z>=0?1:-1;
-  J.handF.copy(p.handle).addScaledVector(hA,0.18*sgn); J.handB.copy(p.handle).addScaledVector(hA,-0.18*sgn);
-  const g=p.grabs, tmp=V3(), ease=t=>clamp(t,0,1);
-  if(g.Indy>0)J.handB.lerp(tmp.set(FACING*0.22,0.05,-0.08),ease(g.Indy));
-  if(g.Tail>0)J.handB.lerp(tmp.set(0,0.05,-0.67),ease(g.Tail));
-  if(g.Melon>0)J.handF.lerp(tmp.set(-FACING*0.22,0.05,0.08),ease(g.Melon));
-  if(g.Nose>0)J.handF.lerp(tmp.set(0,0.05,0.67),ease(g.Nose));
+  // handle: low and close, just ahead of the front hip on the line to the tow point, bar level and across the rope
+  if(p.handleFree){ J.handle.copy(p.handle); J.handleAxis.copy(p.handleAxis); }
+  else {
+    J.handle.copy(J.hips).addScaledVector(toPyl,p.reach).addScaledVector(C,0.06); J.handle.z+=0.06;
+    _pt.copy(p.pylon).sub(J.handle).normalize(); J.handleAxis.crossVectors(p.up,_pt).normalize();
+  }
+  // hands a fist apart; the back hand reaches across the body to the chest-side end of the bar
+  const hA=J.handleAxis; const sgn=hA.dot(C)>=0?1:-1;
+  J.handB.copy(J.handle).addScaledVector(hA,0.075*sgn); J.handF.copy(J.handle).addScaledVector(hA,-0.075*sgn);
+  const tmp=V3(), ease=t=>clamp(t,0,1);
+  if(g.Indy>0)J.handB.lerp(GRAB_PT.Indy,ease(g.Indy));
+  if(g.Tail>0)J.handB.lerp(GRAB_PT.Tail,ease(g.Tail));
+  if(g.Melon>0)J.handF.lerp(GRAB_PT.Melon,ease(g.Melon));
+  if(g.Nose>0)J.handF.lerp(GRAB_PT.Nose,ease(g.Nose));
   if(p.bail>0){J.handF.copy(J.shF).add(tmp.set(Math.sin(p.bail*11)*0.5,0.2+Math.cos(p.bail*8)*0.4,0.3));J.handB.copy(J.shB).add(tmp.set(Math.cos(p.bail*9)*0.5,0.1+Math.sin(p.bail*10)*0.4,-0.3));}
   const poleF=V3().copy(C).multiplyScalar(-0.5).addScaledVector(UP,-0.6).addScaledVector(axis,0.5);
   const poleB=V3().copy(C).multiplyScalar(-0.5).addScaledVector(UP,-0.6).addScaledVector(axis,-0.5);
   ik2(J.shF,J.handF,0.29,0.28,poleF,J.elF); ik2(J.shB,J.handB,0.29,0.28,poleB,J.elB);
+  // head turns toward what the rider is watching, as far as a neck allows (about 80° either side of the chest)
+  const look=J.look.copy(p.look).sub(J.head).normalize();
+  for(let i=0;i<8;i++){ _hx.copy(look).addScaledVector(torsoDir,-look.dot(torsoDir)); _hy.copy(C).addScaledVector(torsoDir,-C.dot(torsoDir));
+    if(_hx.normalize().dot(_hy.normalize())>=0.17)break; look.addScaledVector(_hy,0.3).normalize(); }
+  _hy.copy(torsoDir).addScaledVector(look,-torsoDir.dot(look)).normalize(); _hx.crossVectors(_hy,look);
   // place meshes
-  P.pelvis.position.copy(J.hips); P.pelvis.quaternion.setFromUnitVectors(UP,torsoDir);
+  P.pelvis.position.copy(J.hips); P.pelvis.quaternion.setFromUnitVectors(UP,B);
   placeLimb(P.torso,V3().copy(J.hips).addScaledVector(torsoDir,0.04),J.sh);
   placeLimb(P.vest,V3().copy(J.hips).addScaledVector(torsoDir,0.09),V3().copy(J.sh).addScaledVector(torsoDir,0.03));
   placeLimb(P.neck,J.sh,J.head);
-  P.head.position.copy(J.head); P.head.quaternion.setFromUnitVectors(V3(0,0,1),C);
+  P.head.position.copy(J.head); P.head.quaternion.setFromRotationMatrix(_hm.makeBasis(_hx,_hy,look));
   placeLimb(P.thighF,J.hipF,J.kneeF); placeLimb(P.thighB,J.hipB,J.kneeB); placeLimb(P.shinF,J.kneeF,J.footF); placeLimb(P.shinB,J.kneeB,J.footB);
   placeLimb(P.uarmF,J.shF,J.elF); placeLimb(P.uarmB,J.shB,J.elB); placeLimb(P.farmF,J.elF,J.handF); placeLimb(P.farmB,J.elB,J.handB);
   P.handF.position.copy(J.handF); P.handB.position.copy(J.handB);
@@ -815,11 +842,11 @@ const R={
   load:0, loading:false, popRequest:false, ropeTaut:true,
   vySurf:0, airT:0, bailT:0, maxH:0, takeoffU:0, takeoffWake:false, takeoffYaw:0,
   grabs:{Indy:0,Melon:0,Nose:0,Tail:0}, grabHeld:{Indy:false,Melon:false,Nose:false,Tail:false}, grabVis:{Indy:0,Melon:0,Nose:0,Tail:0},
-  nrm:V3(0,1,0), crouch:0.3, landComp:0, quat:new THREE.Quaternion(), baseQuat:new THREE.Quaternion(), renderQuat:new THREE.Quaternion(),
+  nrm:V3(0,1,0), fw:V3(0,G,0), crouch:0.3, landComp:0, quat:new THREE.Quaternion(), baseQuat:new THREE.Quaternion(), renderQuat:new THREE.Quaternion(),
   tumble:new THREE.Quaternion(), tumbleAxis:V3(0,1,0),
 };
 const SESSION={score:0,best:0,bestName:'none yet',falls:0};
-const _rr=V3();
+const _rr=V3(), _fw=V3();
 function applyRope(p){
   _rr.copy(R.pos).sub(p); const dist=_rr.length();
   if(dist>ROPE_LEN){_rr.multiplyScalar(1/dist); R.pos.copy(p).addScaledVector(_rr,ROPE_LEN+(dist-ROPE_LEN)*0.12);
@@ -833,6 +860,7 @@ function resetRider(){
   R.load=0; R.loading=false; R.popRequest=false; R.airT=0; R.vySurf=0; R.bailT=0; R.landComp=0;
   for(const k in R.grabs)R.grabs[k]=0;
   R.renderQuat.identity(); R.baseQuat.identity();
+  R.fw.set(0,G,0); poseParams.axis.copy(UP); poseParams.axisVel.set(0,0,0); cam.trauma=0;
 }
 function takeoff(vy){
   R.state='air'; R.airT=0; R.vel.y=vy; R.spin=R.flip=R.roll=0; R.spinVel=R.flipVel=R.rollVel=0; R.maxH=0;
@@ -870,6 +898,9 @@ function stepRider(dt){
     const hNext=waterAt(R.pos.x+R.vel.x*dt,R.pos.z+R.vel.z*dt,boatZ+BOAT_SPEED*dt,simTime+dt);
     const vyS=(hNext-hNow)/dt; const aReq=(vyS-R.vySurf)/dt; R.vySurf=vyS;
     R.pos.y=hNow; surfaceNormal(R.pos.x,R.pos.z,boatZ,simTime,R.nrm);
+    // force the water puts on the board, per kg: grip, drag and support (including the shove up a wake face).
+    // For the rider to balance, their centre of mass has to sit on this line, so the pose leans along it.
+    _fw.set(nx*aLat-hx*dragA, G+clamp(aReq,-G,3*G), nz*aLat-hz*dragA); R.fw.lerp(_fw,1-Math.exp(-dt/0.06));
     R.landComp=Math.max(0,R.landComp-dt*2.2);
     if(R.popRequest){R.popRequest=false; takeoff(Math.max(vyS,0)+0.9+2.3*R.load); R.load=0;}
     else if(vyS>2.0 && aReq<-G) takeoff(vyS*0.8);
@@ -899,6 +930,7 @@ function stepRider(dt){
 const SPIN_PTS={180:150,360:450,540:900,720:1600,900:2600,1080:4000,1260:6000};
 function land(h){
   const impact=-R.vel.y; R.pos.y=h; R.vel.y=0;
+  cam.trauma=Math.min(1,cam.trauma+clamp((impact-2.5)/6,0,1)*0.8);
   const spinN=Math.round(R.spin/180)*180, spinErr=Math.abs(R.spin-spinN);
   const flipN=Math.round(R.flip/360)*360, flipErr=Math.abs(R.flip-flipN);
   const rollN=Math.round(R.roll/360)*360, rollErr=Math.abs(R.roll-rollN);
@@ -950,7 +982,7 @@ function scoreTrick(t){
   updateSessionHUD();
 }
 function bail(reason){
-  R.state='bail'; R.bailT=0; SESSION.falls++;
+  R.state='bail'; R.bailT=0; SESSION.falls++; cam.trauma=Math.min(1,cam.trauma+0.6);
   R.tumbleAxis.set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).normalize();
   R.vel.y=Math.max(R.vel.y,0.5); R.vel.x*=0.6;
   sprayBurst(R.pos,110,1.4); if(AC)playSplash(1.0);
@@ -961,8 +993,9 @@ function sprayBurst(p,n,power){n=Math.round(n*2.2);for(let i=0;i<n;i++){const a=
 
 // ---------- visuals per frame ----------
 const _tiltQ=new THREE.Quaternion(),_yawQ=new THREE.Quaternion(),_tmpQ=new THREE.Quaternion(),_e=new THREE.Euler();
-const handleW=V3(),handleAxisW=V3(),_v=V3(),_v2=V3();
-const poseParams={crouch:0.3,twist:0.5,lean:0.18,handle:V3(),handleAxis:V3(0,0,1),grabs:R.grabVis,bail:0};
+const handleW=V3(),handleAxisW=V3(),_v=V3(),_v2=V3(),_invQ=new THREE.Quaternion();
+const poseParams={crouch:0.3,twist:0.35,axis:V3(0,1,0),axisVel:V3(),reach:0.26,pylon:V3(),up:V3(0,1,0),look:V3(),handle:V3(),handleAxis:V3(0,0,1),handleFree:false,grabs:R.grabVis,bail:0};
+const LEAN_MAX=55*DEG, BODY_W=9, BODY_Z=0.75; // how far a rider can hang off the board, and how quickly the body follows the forces
 function updateRiderVisual(dt){
   rider.position.copy(R.pos);
   const stance=R.switchStance?Math.PI:0;
@@ -984,36 +1017,45 @@ function updateRiderVisual(dt){
     _tmpQ.setFromAxisAngle(R.tumbleAxis,dt*4.5); R.renderQuat.premultiply(_tmpQ);
   }
   rider.quaternion.copy(R.renderQuat);
-  // handle: in front of the rider toward the pylon
+  rider.updateMatrixWorld(true); _invQ.copy(rider.quaternion).invert();
   const pyl=pylonPos();
-  if(R.state==='bail'){ handleW.set(0,waterAt(0,pyl.z-ROPE_LEN*0.96,boatZ,simTime)+0.05,pyl.z-ROPE_LEN*0.96); handleAxisW.set(1,0,0); }
-  else{
-    const crouch=poseParams.crouch;
-    _v.copy(pyl).sub(R.pos); _v.y=0; _v.normalize();
-    handleW.copy(R.pos).addScaledVector(UP,0.98-0.38*crouch-0.05).addScaledVector(_v,0.62);
-    _v2.copy(pyl).sub(handleW); const dl=_v2.length(); if(dl>ROPE_LEN+0.2){handleW.copy(pyl).addScaledVector(_v2.normalize(),-(ROPE_LEN+0.2));}
-    handleAxisW.crossVectors(UP,_v2.copy(pyl).sub(handleW).normalize()).normalize();
-  }
+  // body line: on the water it follows the force the water puts on the board (see stepRider), which is what makes
+  // the rider hang back against the rope and lean into a cut; in the air it relaxes to straight over the board.
+  if(R.state==='riding'&&R.fw.lengthSq()>1)_v.copy(R.fw).normalize().applyQuaternion(_invQ); else _v.copy(UP);
+  const lean=Math.acos(clamp(_v.y,-1,1)); if(lean>LEAN_MAX){ _v2.set(_v.x,0,_v.z).normalize(); _v.set(_v2.x*Math.sin(LEAN_MAX),Math.cos(LEAN_MAX),_v2.z*Math.sin(LEAN_MAX)); }
+  // sprung rather than snapped, so the body carries its weight through a hard pull or a wake hit
+  const ax=poseParams.axis, av=poseParams.axisVel;
+  _v2.copy(_v).sub(ax).multiplyScalar(BODY_W*BODY_W).addScaledVector(av,-2*BODY_Z*BODY_W);
+  av.addScaledVector(_v2,dt); ax.addScaledVector(av,dt).normalize();
+  rider.worldToLocal(poseParams.pylon.copy(pyl)); poseParams.up.copy(UP).applyQuaternion(_invQ);
+  // what the rider watches: the line ahead and the boat on the water, the landing in the air
+  if(R.state==='air'){ const vy=R.vel.y, h=Math.max(0,R.pos.y-waterAt(R.pos.x,R.pos.z,boatZ,simTime)), tl=(vy+Math.sqrt(vy*vy+2*G*h))/G;
+    _v.set(R.pos.x+R.vel.x*tl,R.pos.y-h,R.pos.z+R.vel.z*tl); }
+  else { _v.set(Math.sin(R.travelYaw),0,Math.cos(R.travelYaw)).multiplyScalar(15).add(R.pos).lerp(pyl,0.35); _v.y=1.3; }
+  rider.worldToLocal(poseParams.look.copy(_v));
+  // a bail lets go of the handle, which floats where it fell
+  poseParams.handleFree=R.state==='bail';
+  if(R.state==='bail'){ handleW.set(0,waterAt(0,pyl.z-ROPE_LEN*0.96,boatZ,simTime)+0.05,pyl.z-ROPE_LEN*0.96); rider.worldToLocal(poseParams.handle.copy(handleW)); poseParams.handleAxis.set(1,0,0).applyQuaternion(_invQ); }
+  // pose
+  for(const k in R.grabVis){ const want=(R.state==='air'&&R.grabHeld[k])?1:0; R.grabVis[k]=damp(R.grabVis[k],want,want?14:10,dt); if(R.grabVis[k]<0.02)R.grabVis[k]=0; }
+  const anyGrab=Object.values(R.grabVis).some(v=>v>0.3);
+  let crouchT;
+  // legs soak up the wake: they fold as the face shoves the board up, and extend as the surface drops away
+  if(R.state==='riding')crouchT=0.34+0.45*R.load+0.55*R.landComp+0.12*Math.abs(R.steer)+clamp((R.fw.y/G-1)*0.25,-0.12,0.3);
+  else if(R.state==='air')crouchT=anyGrab?0.8:0.42;
+  else crouchT=0.6;
+  poseParams.crouch=damp(poseParams.crouch,clamp(crouchT,0,1),R.state==='riding'?9:6,dt);
+  poseParams.twist=damp(poseParams.twist,R.state==='air'?0.25:0.35,5,dt);
+  poseParams.bail=R.state==='bail'?R.bailT:0;
+  solvePose(poseParams);
+  // handle and rope follow the hands
+  rider.localToWorld(handleW.copy(J.handle)); handleAxisW.copy(J.handleAxis).applyQuaternion(rider.quaternion).normalize();
   handle.position.copy(handleW); handle.quaternion.setFromUnitVectors(V3(1,0,0),handleAxisW);
   // rope segments with sag when slack
   _v.copy(handleW).sub(pyl); const dist=_v.length(); const ropeL=ROPE_LEN-0.5;
   const sag=R.state==='bail'?0.8:(dist<ropeL-0.08?Math.sqrt(Math.max(0,ropeL*ropeL-dist*dist))*0.35:0);
   const n=ropeSegs.length; let prev=V3().copy(pyl);
   for(let i=0;i<n;i++){const t=(i+1)/n;const p=V3().copy(pyl).lerp(handleW,t);p.y-=sag*Math.sin(t*Math.PI);const wy=waterAt(p.x,p.z,boatZ,simTime)+0.06;if(p.y<wy)p.y=wy;placeLimb(ropeSegs[i],prev,p);prev=p;}
-  // pose
-  for(const k in R.grabVis){ const want=(R.state==='air'&&R.grabHeld[k])?1:0; R.grabVis[k]=damp(R.grabVis[k],want,want?14:10,dt); if(R.grabVis[k]<0.02)R.grabVis[k]=0; }
-  const anyGrab=Object.values(R.grabVis).some(v=>v>0.3);
-  let crouchT;
-  if(R.state==='riding')crouchT=0.28+0.5*R.load+0.55*R.landComp+0.12*Math.abs(R.steer);
-  else if(R.state==='air')crouchT=anyGrab?0.8:0.42;
-  else crouchT=0.6;
-  poseParams.crouch=damp(poseParams.crouch,crouchT,R.state==='riding'?9:6,dt);
-  poseParams.twist=damp(poseParams.twist,R.state==='air'?0.3:0.5,5,dt);
-  poseParams.lean=damp(poseParams.lean,R.state==='riding'?0.16+0.22*Math.abs(R.steer):0.05,5,dt);
-  poseParams.bail=R.state==='bail'?R.bailT:0;
-  rider.worldToLocal(poseParams.handle.copy(handleW));
-  poseParams.handleAxis.copy(handleAxisW).applyQuaternion(_tmpQ.copy(rider.quaternion).invert()).normalize();
-  solvePose(poseParams);
   // the shadow camera straddles rider and boat
   _v.set(R.pos.x*0.5,0,(R.pos.z+boatZ)*0.5);
   sun.position.copy(_v).addScaledVector(SUN,80); sun.target.position.copy(_v);
@@ -1040,22 +1082,38 @@ function updateBoatVisual(){
   boat.rotation.set(-2.5*DEG+0.4*DEG*Math.sin(simTime*1.7),0,1.2*DEG*Math.sin(simTime*1.3));
 }
 // camera
-const cam={pos:V3(0,2.6,-28),look:V3(0,1,0),mode:0,fov:54};
+// 0 follow, 1 long lens from well back (how wake films are shot: compressed background, rider the same size), 2 boat tower
+const cam={pos:V3(0,2.6,-28),look:V3(0,1,0),mode:0,fov:54,snap:false,trauma:0};
+const SHAKE=matchMedia('(prefers-reduced-motion: reduce)').matches?0:1;
+function cycleCam(){ cam.mode=(cam.mode+1)%3; cam.snap=true; }
 function updateCamera(dt,snap){
+  snap=snap||cam.snap; cam.snap=false;
   if(cam.mode===0){
     const sp=Math.hypot(R.vel.x,R.vel.z);
     const tx=R.pos.x*0.55, ty=1.95+Math.max(0,R.pos.y)*0.45, tz=R.pos.z-7.8;
-    if(snap){cam.pos.set(tx,ty,tz);cam.look.set(R.pos.x,R.pos.y+0.8,R.pos.z+5);}
+    if(snap){cam.pos.set(tx,ty,tz);cam.look.set(R.pos.x,R.pos.y+0.8,R.pos.z+5);cam.fov=52;}
     cam.pos.x=damp(cam.pos.x,tx,4.5,dt); cam.pos.y=damp(cam.pos.y,ty,5,dt); cam.pos.z=damp(cam.pos.z,tz,10,dt);
     cam.look.x=damp(cam.look.x,R.pos.x,7,dt); cam.look.y=damp(cam.look.y,R.pos.y+0.8,7,dt); cam.look.z=damp(cam.look.z,R.pos.z+5,10,dt);
     camera.position.copy(cam.pos); camera.lookAt(cam.look);
     camera.rotateZ(-R.steer*0.025);
     cam.fov=damp(cam.fov,52+clamp(sp-BOAT_SPEED,0,8)*1.1+(R.state==='air'?3:0),3,dt);
+  } else if(cam.mode===1){
+    const tx=R.pos.x*0.75, ty=2.2+Math.max(0,R.pos.y)*0.5, tz=R.pos.z-24;
+    if(snap){cam.pos.set(tx,ty,tz);cam.look.set(R.pos.x,R.pos.y+0.9,R.pos.z+1);cam.fov=19;}
+    cam.pos.x=damp(cam.pos.x,tx,2.5,dt); cam.pos.y=damp(cam.pos.y,ty,3,dt); cam.pos.z=damp(cam.pos.z,tz,8,dt);
+    cam.look.x=damp(cam.look.x,R.pos.x,6,dt); cam.look.y=damp(cam.look.y,R.pos.y+0.9,6,dt); cam.look.z=damp(cam.look.z,R.pos.z+1,10,dt);
+    camera.position.copy(cam.pos); camera.lookAt(cam.look);
+    cam.fov=damp(cam.fov,19+(R.state==='air'?3:0),3,dt);
   } else {
+    if(snap)cam.fov=34;
     camera.position.set(0.0,3.05+0.03*Math.sin(simTime*2.1),boatZ+1.0);
     _v.set(R.pos.x,R.pos.y+0.8,R.pos.z); camera.lookAt(_v);
     cam.fov=damp(cam.fov,34,3,dt);
   }
+  // landing jolt: a short rotational shake that scales with trauma squared; narrower lenses get a smaller angle
+  if(cam.trauma>0){ const s=cam.trauma*cam.trauma*SHAKE*cam.fov/52, t=performance.now()*0.028;
+    camera.rotateX((Math.sin(t*1.1)+0.5*Math.sin(t*2.3+1.7))*0.03*s); camera.rotateY((Math.sin(t*0.9+0.6)+0.5*Math.sin(t*2.7))*0.03*s);
+    camera.rotateZ((Math.sin(t*1.3+2.1)+0.5*Math.sin(t*3.1))*0.045*s); cam.trauma=Math.max(0,cam.trauma-dt*1.5); }
   camera.fov=cam.fov; camera.updateProjectionMatrix();
 }
 
@@ -1091,7 +1149,7 @@ function begin(){ if(started)return; started=true; document.getElementById('star
 function onDown(code){
   if(code==='Space'){ if(R.state==='riding'){R.loading=true;} }
   if(GRAB_KEYS[code])R.grabHeld[GRAB_KEYS[code]]=true;
-  if(code==='KeyV')cam.mode=1-cam.mode;
+  if(code==='KeyV')cycleCam();
   if(code==='KeyR' && !fade.active)fadeOut(()=>resetRider());
   if(code==='KeyM'){muted=!muted; if(master)master.gain.value=muted?0:0.9;}
   if(code==='KeyP'){ if(qualityAuto){qualityAuto=false;setQuality(2);} else if(quality>0){setQuality(quality-1);} else {qualityAuto=true;setQuality(2);} qualityTimer=0; }
@@ -1119,7 +1177,7 @@ function pollGamepad(){
   if(!loadNow && gpLoading){ if(R.state==='riding' && R.loading)R.popRequest=true; R.loading=false; }
   gpLoading=loadNow;
   R.grabHeld.Melon=R.grabHeld.Melon||b(4); R.grabHeld.Indy=R.grabHeld.Indy||b(5); R.grabHeld.Nose=R.grabHeld.Nose||b(6); R.grabHeld.Tail=R.grabHeld.Tail||b(7);
-  if(b(3)&&!gpPrevButtons[3])cam.mode=1-cam.mode;
+  if(b(3)&&!gpPrevButtons[3])cycleCam();
   if(b(9)&&!gpPrevButtons[9]&&!fade.active)fadeOut(()=>resetRider());
   gpPrevButtons=gp.buttons.map(x=>x.pressed);
   return {steer:-lsx,flip:-lsy,roll:rsx};
@@ -1153,7 +1211,7 @@ function enableTouch(){ if(touch.active)return; touch.active=true; document.body
   for(const k of ['Indy','Melon','Nose','Tail'])bindHold('b-'+k.toLowerCase(),()=>{touch.grab[k]=true;},()=>{touch.grab[k]=false;});
   bindHold('b-tantrum',()=>{touch.roll=-1;},()=>{if(touch.roll<0)touch.roll=0;});
   bindHold('b-frontflip',()=>{touch.roll=1;},()=>{if(touch.roll>0)touch.roll=0;});
-  bindHold('b-cam',()=>{cam.mode=1-cam.mode;},()=>{});
+  bindHold('b-cam',cycleCam,()=>{});
   bindHold('b-reset',()=>{ if(!fade.active)fadeOut(()=>resetRider()); },()=>{});
   document.getElementById('touch').addEventListener('contextmenu',e=>e.preventDefault());
   if(isTouchDevice)enableTouch();
