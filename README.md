@@ -4,7 +4,7 @@ A browser wakeboarding sim in the spirit of EA Skate. You ride a 65 ft line behi
 
 ## Run it
 
-Open `index.html` in any desktop browser. Everything is self-contained apart from three CDN loads: three.js r128 (cdnjs), its glTF loader (jsDelivr) and the Barlow Condensed / DM Sans fonts (Google Fonts). The rider model ships as `assets/rider.js`, so opening the file straight from disk works. A local server works too:
+Open `index.html` in any desktop browser. Everything is self-contained apart from three CDN loads: three.js r128 (cdnjs), its glTF loader (jsDelivr) and the Barlow Condensed / DM Sans fonts (Google Fonts). The music streams from SoundCloud through its widget (see below); without a connection the game still runs, just without the tunes. The rider model ships as `assets/rider.js`, so opening the file straight from disk works. A local server works too:
 
 ```bash
 python3 -m http.server 8000
@@ -12,7 +12,7 @@ python3 -m http.server 8000
 
 then visit http://localhost:8000/.
 
-Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landscape works best.
+Keyboard, gamepad or touch. Sound and music start on the first input. On a phone, landscape works best.
 
 ## Controls
 
@@ -27,9 +27,10 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 | `V` | cycle cameras: follow, long lens, boat tower | |
 | `P` | cycle quality: high, medium, low, auto | |
 | `R` | reset behind the boat | |
-| `M` | mute | |
+| `M` | mute (music too) | |
+| `N` `B` / d-pad ▶ ◀ | next / previous tune from the boat | |
 
-**Touch:** drag anywhere on the left half for a floating stick (left/right to edge, and to spin in the air; up/down in the air for front roll / backroll). Right side: hold **Pop** to load and release at the lip, hold a grab button while airborne, hold **Tantrum** or **Front flip** to rotate, tap **Cam** or **Reset**.
+**Touch:** drag anywhere on the left half for a floating stick (left/right to edge, and to spin in the air; up/down in the air for front roll / backroll). Right side: hold **Pop** to load and release at the lip, hold a grab button while airborne, hold **Tantrum** or **Front flip** to rotate, tap **Cam** or **Reset**. The DJ panel under the score plays, pauses and skips the music.
 
 ## How it works
 
@@ -40,6 +41,7 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 - **Takeoff** happens at the lip, where the surface falls away faster than gravity can follow, and the board leaves with the speed it had going up the ramp. Relaxed legs soak up about 2.4 m/s of that, so cutting out over the wake is just a bump. Hold Space and you stand tall through the lip; let go partway up the ramp and your legs extend through it, adding 0.5–1.5 m/s. Let go on flat water and it's an ollie.
 - **Rider** is a skinned human (see below) posed from the physics. The body leans along the force the water puts on the board, so it hangs back against the rope and tips into a cut, and it is sprung rather than snapped so it carries weight. The chest and shoulders square up to the handle, held overhand in front of the belly at one fixed arm's reach: the body leans and folds, the arms never stretch or shorten. The legs soak up a wake face and extend as it drops away, the knees come up in the air, grabs tuck right down to the board, spins and flips pull the handle in to the waist and pass it behind the back (the near hand holds it on each side, the free arm out for balance), and the head watches the boat or the landing. The board edges and tilts to the surface normal.
 - **Cameras**: a close follow cam, a long-lens chase from about 24 m back (the compressed look of wake films), and the boat's tower. Hard landings and falls jolt the camera unless the system asks for reduced motion.
+- **Music**: DJ Paulie P drives the boat and plays his SoundCloud through the tower speakers. The SoundCloud widget runs as a hidden iframe, like the head unit under the dash, and the DJ panel is its remote: track title, artwork, a progress bar, play/pause, previous and next, with the title linking back to the track on SoundCloud. It starts with the session, gets a little quieter the further the camera is from the boat, dips the engine drone while it plays, and goes round to the first tune again after the last. The speakers' LED rings glow and the crew nod along while the set plays. Some browsers (mostly Safari on iPhone) won't start a hidden player; if nothing is playing a few seconds after asking, the real SoundCloud player slides out under the panel for one tap and tucks away again once the music starts. If SoundCloud can't be reached, the panel says so and links to the page instead.
 - **Landing** checks rotation against the nearest 180 or 360, impact speed, and whether you cased the second wake. A gentle assist helps only when you are already within 45° of clean.
 - **Scoring** names tricks properly (Mobe, Scarecrow, Whirlybird, Backroll to Blind, wake-to-wake bonuses) and multiplies for clean landings.
 - **Performance** scales automatically: water mesh density, render resolution, shader detail, reflection resolution, bloom, shadow map size and tree density step down when frames run long and back up with headroom. Low quality drops the reflection pass and uses the analytic sky instead.
@@ -64,6 +66,8 @@ pip install playwright matplotlib numpy && playwright install chromium
 python tools/jump_bench.py        # table in the terminal, plot in tools/out/jump_bench.png
 ```
 
+
+The music is `DJ_SETS` in `index.html`: a list of SoundCloud links, each a track, a set or a whole profile. Next steps through the tracks inside one, then moves on to the next link. Use full `soundcloud.com/...` addresses; `on.soundcloud.com` share links don't always resolve inside the widget (open one in a browser and copy the address it lands on). `DJ_VOL` sets how loud it plays with the camera on the boat.
 
 The physics constants sit at the top of the script in `index.html`: boat speed, rope length, edge grip and cap, drag, pop strength, spin and flip rates. The wake shape is the `wake()` function, written once in GLSL and once in JavaScript; keep the two in step.
 
