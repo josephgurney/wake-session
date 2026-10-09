@@ -1424,9 +1424,8 @@ function updateAudio(dt){
 // Paulie drives the boat and plays his SoundCloud through the tower speakers. The SoundCloud widget is a hidden
 // iframe, like the head unit under the dash, and the DJ panel is its remote. Each entry in DJ_SETS can be a track,
 // a set or a whole profile: next steps through the tracks inside one, then moves on to the next entry.
-// SoundCloud's on.soundcloud.com share links don't always resolve inside the widget. If the panel says it can't
-// find the music, open the link in a browser and paste the full soundcloud.com address from the address bar here.
-const DJ_SETS=['https://on.soundcloud.com/UCAWPhu6yDYMOUkZiJ'];
+// Use full soundcloud.com addresses: on.soundcloud.com share links don't always resolve inside the widget.
+const DJ_SETS=['https://soundcloud.com/paul-prouse'];
 const DJ_VOL=85;             // widget volume (0-100) with the camera on the boat; it eases off down the line
 const dj={w:null,ready:false,playing:false,want:false,failed:false,set:0,idx:0,n:0,pos:0,prog:0,vol:-1,glow:0,blockAt:0,errs:0,bootT:0,progT:0,url:''};
 const djEl={panel:document.getElementById('dj'),title:document.getElementById('dj-title'),by:document.getElementById('dj-by'),art:document.getElementById('dj-art'),bar:document.getElementById('dj-bar'),play:document.getElementById('dj-play'),frame:document.getElementById('sc')};
