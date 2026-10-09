@@ -1,6 +1,6 @@
 # Thursday Yacht Club
 
-*Lobster presents.*
+*Lobster presents. No Risk, No Story.*
 
 A browser wakeboarding sim in the spirit of EA Skate. You ride a 65 ft line behind a boat holding 21 mph, carve out wide, edge back into the wake, pop off the lip and land spins, rolls and grabs. One HTML file, no build step.
 
@@ -77,3 +77,7 @@ One trap worth knowing about: never zero out a shader term by multiplying by `st
 ## Credits
 
 Rider body, skeleton and skin weights: the MakeHuman base mesh and MPFB2 game-engine rig, released as CC0 by the MakeHuman team (Data Collection AB, Joel Palmius, Jonas Hauquier).
+
+## Branding
+
+The game is presented by Lobster Eyewear. The logo (`assets/lobster-logo.png`) comes from the Lobster logo pack, and the HUD colours are sampled from it: navy `#1f1b48`, yellow `#ffed00`, hot pink `#e6007e`. On-screen copy follows the Lobster voice in the `twg-brand-skills` repo (`skills/lobster-eyewear.md`): short sentences, UK English, cheeky, no em dashes.

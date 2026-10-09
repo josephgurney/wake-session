@@ -6,15 +6,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&family=DM+Sans:wght@400;500&display=swap">
 <style>
-/* Layout: full-bleed WebGL canvas, HUD pinned to corners, trick callouts centred. Single committed look (bright lake, dark glass HUD). */
+/* Layout: full-bleed WebGL canvas, HUD pinned to corners, trick callouts centred. Single committed look (bright lake, Lobster-navy glass HUD).
+   Brand colours are sampled from the Lobster logo (assets/lobster-logo.png): navy #1f1b48, yellow #ffed00, hot pink #e6007e. */
 :root{
-  --bg:#0a1620;            /* fallback ground behind the canvas */
+  --bg:#110e2a;            /* fallback ground behind the canvas */
   --ink:#f4f8fa;           /* HUD text */
-  --ink-dim:#a8bcc7;       /* HUD secondary */
-  --glass:rgba(6,18,28,.58);
+  --ink-dim:#b8b4d8;       /* HUD secondary */
+  --glass:rgba(31,27,72,.62);
   --glass-edge:rgba(255,255,255,.14);
-  --accent:#ffd166;        /* trick / score highlight */
-  --danger:#ff5d5d;
+  --navy:#1f1b48;          /* Lobster navy */
+  --accent:#ffed00;        /* Lobster yellow: trick / score highlight */
+  --pink:#e6007e;          /* Lobster hot pink */
+  --danger:var(--pink);
   --display:"Barlow Condensed","Arial Narrow",Impact,sans-serif;
   --body:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   color-scheme:dark;
@@ -32,32 +35,35 @@ body{padding:0}
 .small{font-size:12px;color:var(--ink-dim);margin-top:4px;font-variant-numeric:tabular-nums}
 .small b{color:var(--ink);font-weight:500}
 #airline{font-family:var(--display);font-weight:700;font-size:18px;color:var(--accent);margin-top:4px;min-height:20px;letter-spacing:.03em;text-transform:uppercase}
-#trick{position:absolute;left:50%;top:22%;transform:translate(-50%,0);text-align:center;opacity:0;font-family:var(--display);text-transform:uppercase;pointer-events:none;text-shadow:0 2px 14px rgba(0,0,0,.5)}
+#trick{position:absolute;left:50%;top:22%;transform:translate(-50%,0);text-align:center;opacity:0;font-family:var(--display);text-transform:uppercase;pointer-events:none;text-shadow:3px 3px 0 var(--navy),0 2px 14px rgba(0,0,0,.5)}
 #trick .name{font-size:clamp(28px,6vw,64px);font-weight:800;line-height:1;letter-spacing:.02em;color:#fff;text-wrap:balance}
 #trick .pts{font-size:clamp(20px,3.6vw,36px);font-weight:700;color:var(--accent);margin-top:4px;font-variant-numeric:tabular-nums}
-#trick .sub{font-family:var(--body);text-transform:none;font-size:13px;color:var(--ink-dim);margin-top:6px}
+#trick .sub{font-family:var(--body);text-transform:none;font-size:13px;color:var(--ink);margin-top:6px;text-shadow:0 1px 6px rgba(0,0,0,.7)}
 #trick.show{animation:pop 2.6s ease-out forwards}
 #trick.bail .name{color:var(--danger)}
 @keyframes pop{0%{opacity:0;transform:translate(-50%,14px) scale(.92)}8%{opacity:1;transform:translate(-50%,0) scale(1.04)}14%{transform:translate(-50%,0) scale(1)}75%{opacity:1}100%{opacity:0;transform:translate(-50%,-10px)}}
 #controls{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;gap:6px 18px;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 32px);font-size:12px;color:var(--ink-dim);background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:7px 12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 #controls kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase}
-#start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(5,18,28,.35),rgba(5,18,28,.86));pointer-events:auto;transition:opacity .5s;overflow-y:auto;touch-action:pan-y;padding:12px 0;box-sizing:border-box}
+#start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(17,14,42,.35),rgba(17,14,42,.88));pointer-events:auto;transition:opacity .5s;overflow-y:auto;touch-action:pan-y;padding:12px 0;box-sizing:border-box}
 #start.hide{opacity:0;pointer-events:none}
 .card{margin:auto;max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:28px 30px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .card .presents{font-family:var(--display);font-weight:700;font-size:clamp(14px,2.4vw,18px);letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 10px}
 .card .presents b{font-weight:800;color:var(--ink)}
+.card .presents{display:flex;align-items:center;gap:12px;margin:0 0 14px;font-family:var(--display);font-weight:700;font-size:clamp(13px,2.2vw,16px);letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim)}
+.card .presents img{display:block;height:clamp(30px,5.4vw,42px);width:auto}
 .card h1{font-family:var(--display);font-weight:800;font-size:clamp(44px,9vw,84px);line-height:.92;margin:0;letter-spacing:.01em;text-transform:uppercase}
 .card h1 em{font-style:normal;color:var(--accent);white-space:nowrap}
+.card .tagline{font-family:var(--display);font-weight:800;font-size:clamp(18px,3vw,24px);letter-spacing:.04em;text-transform:uppercase;color:var(--pink);margin-top:10px}
 .card p{margin:12px 0 0;color:var(--ink-dim);line-height:1.55;max-width:60ch}
 .card .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;margin-top:18px;font-size:13px}
 .card .grid div{display:flex;justify-content:space-between;gap:10px;align-items:center;min-width:0}
 .card .grid span:first-child{white-space:nowrap}
 .card .grid span:last-child{color:var(--ink-dim);text-align:right}
 .card kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
-.card button{margin-top:22px;font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent);color:#1a1200;border:0;border-radius:6px;padding:12px 26px;cursor:pointer;width:100%}
+.card button{margin-top:22px;font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent);color:var(--navy);border:0;border-radius:6px;padding:12px 26px;cursor:pointer;width:calc(100% - 5px);box-shadow:5px 5px 0 var(--pink)}
 .card button:focus-visible{outline:3px solid #fff;outline-offset:2px}
 .card .note{font-size:12px;margin-top:10px;text-align:center}
-#fade{position:absolute;inset:0;background:#06121b;opacity:0;pointer-events:none;transition:opacity .25s}
+#fade{position:absolute;inset:0;background:#110e2a;opacity:0;pointer-events:none;transition:opacity .25s}
 #gp{position:absolute;right:16px;bottom:calc(14px + env(safe-area-inset-bottom,0px));font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);display:none}
 @media (max-width:640px){.big{font-size:30px}#controls{display:none}.card .grid{grid-template-columns:1fr}.card{padding:22px}}
 /* touch layer */
@@ -69,12 +75,12 @@ body.touch .card .grid.kb{display:none}
 .card .grid.tc{display:none}
 body.touch .card .grid.tc{display:grid}
 #stick-zone{position:absolute;left:0;top:0;width:50%;height:100%;pointer-events:auto;touch-action:none}
-#stick-base{position:absolute;width:104px;height:104px;margin:-52px 0 0 -52px;border-radius:50%;background:rgba(6,18,28,.35);border:1.5px solid rgba(255,255,255,.35);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+#stick-base{position:absolute;width:104px;height:104px;margin:-52px 0 0 -52px;border-radius:50%;background:rgba(31,27,72,.35);border:1.5px solid rgba(255,255,255,.35);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
 #stick-base[hidden]{display:none}
 #stick-knob{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:rgba(255,255,255,.85);box-shadow:0 2px 10px rgba(0,0,0,.35)}
 #pad{position:absolute;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:auto auto;grid-template-areas:"grabs grabs" "rolls pop";gap:10px;align-items:end;justify-items:end}
-#touch button{pointer-events:auto;touch-action:none;font-family:var(--display);font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink);background:rgba(6,18,28,.55);border:1.5px solid rgba(255,255,255,.3);border-radius:12px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
-#touch button.on{background:var(--accent);color:#1a1200;border-color:var(--accent)}
+#touch button{pointer-events:auto;touch-action:none;font-family:var(--display);font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink);background:rgba(31,27,72,.55);border:1.5px solid rgba(255,255,255,.3);border-radius:12px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#touch button.on{background:var(--accent);color:var(--navy);border-color:var(--accent)}
 #touch button:focus-visible{outline:2px solid #fff}
 .grabs{grid-area:grabs;display:grid;grid-template-columns:56px 56px;gap:8px}
 .grabs button{height:46px;font-size:14px}
@@ -131,9 +137,10 @@ body.touch .card .grid.tc{display:grid}
   <div id="fade"></div>
   <div id="start">
     <div class="card">
-      <div class="presents"><b>Lobster</b> presents</div>
+      <div class="presents"><img src="assets/lobster-logo.png" alt="Lobster" width="739" height="140"><span>presents</span></div>
       <h1>Thursday <em>Yacht Club</em></h1>
-      <p>Boat is set at 21 mph on a 65 ft line. Cut out wide, then edge hard back into the wake. Hold <kbd>Space</kbd> on the way in to load the line and let go at the lip to pop. Clear both wakes for the wake-to-wake bonus. Rotation is set at the lip: tap a direction for a 180, hold it longer to wind up more, then keep pushing to tuck and turn faster or push back to open up and slow down. Over- or under-rotate and you catch an edge.</p>
+      <div class="tagline">No Risk, No Story.</div>
+      <p>The boat's doing 21 mph on a 65 ft line. Cut out wide, then edge hard back at the wake. Hold <kbd>Space</kbd> on the way in to load the line, and let go at the lip to pop. Clear both wakes for the bonus. Spins are set at the lip: tap a direction for a 180, hold it to wind up more. Keep pushing to tuck and spin faster, push back to open up and slow it. Land straight, or catch an edge and drink half the lake.</p>
       <div class="grid kb">
         <div><span><kbd>←</kbd> <kbd>→</kbd></span><span>heelside / toeside edge · spin off the lip (tap for 180, hold to wind up more)</span></div>
         <div><span>keep pushing /<br>push back</span><span>tuck to turn faster / open up to slow it</span></div>
@@ -1205,7 +1212,7 @@ function bail(reason,fall){
   else { R.tumbleAxis.set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).normalize(); R.tumbleLeft=2.4; }
   R.vel.y=Math.max(R.vel.y,0.5); R.vel.x*=0.6;
   sprayBurst(R.pos,110,1.4); if(AC)playSplash(1.0);
-  showTrick(reason,'','Hold on, the boat is coming round',true);
+  showTrick(reason,'','No Risk, No Story. The boat\'s coming round.',true);
   updateSessionHUD();
 }
 function sprayBurst(p,n,power){n=Math.round(n*2.2);for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,r=Math.random();spray.emit(p.x+Math.cos(a)*r*0.7,p.y+0.05,p.z+Math.sin(a)*r*0.7,Math.cos(a)*r*4.5*power,(1.5+Math.random()*4.5)*power,BOAT_SPEED*0.6+Math.sin(a)*r*4.5*power,0.45+Math.random()*0.6,0.07+Math.random()*0.26);}}
