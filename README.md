@@ -12,7 +12,7 @@ python3 -m http.server 8000
 
 then visit http://localhost:8000/.
 
-Keyboard or gamepad. Sound starts on the first input.
+Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landscape works best.
 
 ## Controls
 
@@ -28,6 +28,8 @@ Keyboard or gamepad. Sound starts on the first input.
 | `P` | cycle quality: high, medium, low, auto | |
 | `R` | reset behind the boat | |
 | `M` | mute | |
+
+**Touch:** drag anywhere on the left half for a floating stick (left/right to edge, and to spin in the air; up/down in the air for front roll / backroll). Right side: hold **Pop** to load and release at the lip, hold a grab button while airborne, hold **Tantrum** or **Front flip** to rotate, tap **Cam** or **Reset**.
 
 ## How it works
 

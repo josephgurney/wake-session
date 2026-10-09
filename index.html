@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Wake Session</title>
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&family=DM+Sans:wght@400;500&display=swap">
 <style>
 /* Layout: full-bleed WebGL canvas, HUD pinned to corners, trick callouts centred. Single committed look (bright lake, dark glass HUD). */
@@ -19,10 +19,10 @@
   --body:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   color-scheme:dark;
 }
-html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);overflow:hidden}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);overflow:hidden;touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 body{padding:0}
-#c{position:fixed;inset:0;width:100%;height:100%;display:block;outline:none}
-#hud{position:fixed;inset:0;pointer-events:none;padding:calc(14px + env(safe-area-inset-top,0px)) 16px calc(14px + env(safe-area-inset-bottom,0px));box-sizing:border-box}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;outline:none;touch-action:none}
+#hud{position:fixed;inset:0;z-index:6;pointer-events:none;padding:calc(14px + env(safe-area-inset-top,0px)) 16px calc(14px + env(safe-area-inset-bottom,0px));box-sizing:border-box}
 .panel{position:absolute;background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:8px 12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);min-width:0}
 .tl{left:16px;top:calc(14px + env(safe-area-inset-top,0px))}
 .tr{right:16px;top:calc(14px + env(safe-area-inset-top,0px));text-align:right}
@@ -41,9 +41,9 @@ body{padding:0}
 @keyframes pop{0%{opacity:0;transform:translate(-50%,14px) scale(.92)}8%{opacity:1;transform:translate(-50%,0) scale(1.04)}14%{transform:translate(-50%,0) scale(1)}75%{opacity:1}100%{opacity:0;transform:translate(-50%,-10px)}}
 #controls{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;gap:6px 18px;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 32px);font-size:12px;color:var(--ink-dim);background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:7px 12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 #controls kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase}
-#start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(5,18,28,.35),rgba(5,18,28,.86));pointer-events:auto;transition:opacity .5s}
+#start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(5,18,28,.35),rgba(5,18,28,.86));pointer-events:auto;transition:opacity .5s;overflow-y:auto;touch-action:pan-y;padding:12px 0;box-sizing:border-box}
 #start.hide{opacity:0;pointer-events:none}
-.card{max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:28px 30px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.card{margin:auto;max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:28px 30px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .card h1{font-family:var(--display);font-weight:800;font-size:clamp(44px,9vw,84px);line-height:.92;margin:0;letter-spacing:.01em;text-transform:uppercase}
 .card h1 em{font-style:normal;color:var(--accent)}
 .card p{margin:12px 0 0;color:var(--ink-dim);line-height:1.55;max-width:60ch}
@@ -57,11 +57,48 @@ body{padding:0}
 #fade{position:absolute;inset:0;background:#06121b;opacity:0;pointer-events:none;transition:opacity .25s}
 #gp{position:absolute;right:16px;bottom:calc(14px + env(safe-area-inset-bottom,0px));font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);display:none}
 @media (max-width:640px){.big{font-size:30px}#controls{display:none}.card .grid{grid-template-columns:1fr}.card{padding:22px}}
+/* touch layer */
+#touch{position:fixed;inset:0;pointer-events:none;z-index:5;touch-action:none}
+#touch[hidden]{display:none}
+body:not(.started) #touch{display:none}
+body.touch #controls{display:none}
+body.touch .card .grid.kb{display:none}
+.card .grid.tc{display:none}
+body.touch .card .grid.tc{display:grid}
+#stick-zone{position:absolute;left:0;top:0;width:50%;height:100%;pointer-events:auto;touch-action:none}
+#stick-base{position:absolute;width:104px;height:104px;margin:-52px 0 0 -52px;border-radius:50%;background:rgba(6,18,28,.35);border:1.5px solid rgba(255,255,255,.35);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+#stick-base[hidden]{display:none}
+#stick-knob{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:rgba(255,255,255,.85);box-shadow:0 2px 10px rgba(0,0,0,.35)}
+#pad{position:absolute;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:auto auto;grid-template-areas:"grabs grabs" "rolls pop";gap:10px;align-items:end;justify-items:end}
+#touch button{pointer-events:auto;touch-action:none;font-family:var(--display);font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink);background:rgba(6,18,28,.55);border:1.5px solid rgba(255,255,255,.3);border-radius:12px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#touch button.on{background:var(--accent);color:#1a1200;border-color:var(--accent)}
+#touch button:focus-visible{outline:2px solid #fff}
+.grabs{grid-area:grabs;display:grid;grid-template-columns:56px 56px;gap:8px}
+.grabs button{height:46px;font-size:14px}
+.rolls{grid-area:rolls;display:grid;gap:8px}
+.rolls button{width:88px;height:40px;font-size:13px}
+#b-pop{grid-area:pop;width:96px;height:96px;border-radius:50%;font-size:24px;font-weight:800;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1}
+#b-pop small{font-family:var(--body);font-weight:500;font-size:10px;letter-spacing:.1em;opacity:.8;margin-top:4px}
+#tapbar{position:absolute;right:16px;top:calc(14px + env(safe-area-inset-top,0px) + 108px);display:flex;gap:8px}
+#tapbar button{height:34px;padding:0 12px;font-size:13px}
+#rotate{position:absolute;left:50%;top:calc(14px + env(safe-area-inset-top,0px) + 108px);transform:translateX(-50%);display:none;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:6px 10px;white-space:nowrap}
+@media (orientation:portrait){body.touch #rotate{display:block;top:calc(14px + env(safe-area-inset-top,0px) + 156px)}}
 @media (prefers-reduced-motion:reduce){#trick.show{animation-duration:2.2s}}
 </style>
 </head>
 <body>
 <canvas id="c" tabindex="0" aria-label="Wakeboarding simulation"></canvas>
+<div id="touch" hidden>
+  <div id="stick-zone" aria-label="Edge and spin stick"></div>
+  <div id="stick-base" hidden><div id="stick-knob"></div></div>
+  <div id="tapbar"><button type="button" id="b-cam">Cam</button><button type="button" id="b-reset">Reset</button></div>
+  <div id="rotate">Rotate your phone for the best view</div>
+  <div id="pad">
+    <div class="grabs"><button type="button" id="b-indy">Indy</button><button type="button" id="b-melon">Melon</button><button type="button" id="b-nose">Nose</button><button type="button" id="b-tail">Tail</button></div>
+    <div class="rolls"><button type="button" id="b-tantrum">Tantrum</button><button type="button" id="b-frontflip">Front flip</button></div>
+    <button type="button" id="b-pop">Pop<small>hold · release</small></button>
+  </div>
+</div>
 <div id="hud">
   <div class="panel tl">
     <div class="label">Session score</div>
@@ -92,7 +129,7 @@ body{padding:0}
     <div class="card">
       <h1>Wake <em>Session</em></h1>
       <p>Boat is set at 21 mph on a 65 ft line. Cut out wide, then edge hard back into the wake. Hold <kbd>Space</kbd> on the way in to load the line and let go at the lip to pop. Clear both wakes for the wake-to-wake bonus. Over- or under-rotate and you swim.</p>
-      <div class="grid">
+      <div class="grid kb">
         <div><span><kbd>←</kbd> <kbd>→</kbd></span><span>heelside / toeside edge · spins in the air</span></div>
         <div><span><kbd>Space</kbd></span><span>hold to load, release to pop</span></div>
         <div><span><kbd>↑</kbd> <kbd>↓</kbd></span><span>front roll / backroll</span></div>
@@ -102,8 +139,16 @@ body{padding:0}
         <div><span><kbd>V</kbd> <kbd>R</kbd> <kbd>P</kbd></span><span>camera · reset · quality</span></div>
         <div><span>Gamepad</span><span>left stick edge · right stick pull down then flick · bumpers grab</span></div>
       </div>
+      <div class="grid tc">
+        <div><span><kbd>Left side</kbd></span><span>drag left / right to edge, and to spin in the air</span></div>
+        <div><span><kbd>Left side</kbd></span><span>drag up / down in the air for front roll / backroll</span></div>
+        <div><span><kbd>Pop</kbd></span><span>hold to load the line, let go at the lip</span></div>
+        <div><span><kbd>Grabs</kbd></span><span>hold any grab button while airborne</span></div>
+        <div><span><kbd>Tantrum</kbd> <kbd>Front flip</kbd></span><span>hold in the air to rotate</span></div>
+        <div><span><kbd>Cam</kbd> <kbd>Reset</kbd></span><span>tap to switch view or get back behind the boat</span></div>
+      </div>
       <button id="go" type="button">Take the handle</button>
-      <div class="note label">Keyboard or gamepad · sound starts on first input</div>
+      <div class="note label">Keyboard, gamepad or touch · sound starts on first input</div>
     </div>
   </div>
 </div>
@@ -760,7 +805,7 @@ function updateAudio(dt){
 // ---------- input ----------
 const keys={};
 const GRAB_KEYS={KeyA:'Melon',KeyD:'Indy',KeyW:'Nose',KeyS:'Tail'};
-function begin(){ if(started)return; started=true; document.getElementById('start').classList.add('hide'); initAudio(); canvas.focus(); }
+function begin(){ if(started)return; started=true; document.getElementById('start').classList.add('hide'); document.body.classList.add('started'); initAudio(); canvas.focus(); }
 function onDown(code){
   if(code==='Space'){ if(R.state==='riding'){R.loading=true;} }
   if(GRAB_KEYS[code])R.grabHeld[GRAB_KEYS[code]]=true;
@@ -798,11 +843,40 @@ function pollGamepad(){
   return {steer:-lsx,flip:-lsy,roll:rsx};
 }
 function gatherInput(){
-  for(const k in R.grabHeld)R.grabHeld[k]=!!keys[Object.keys(GRAB_KEYS).find(c=>GRAB_KEYS[c]===k)];
+  for(const k in R.grabHeld)R.grabHeld[k]=!!keys[Object.keys(GRAB_KEYS).find(c=>GRAB_KEYS[c]===k)]||touch.grab[k];
   const g=pollGamepad();
-  R.steerIn=clamp((keys.ArrowLeft?1:0)-(keys.ArrowRight?1:0)+g.steer,-1,1);
-  R.flipIn=clamp((keys.ArrowUp?1:0)-(keys.ArrowDown?1:0)+g.flip,-1,1);
-  R.rollIn=clamp((keys.KeyE?1:0)-(keys.KeyQ?1:0)+g.roll,-1,1);
+  R.steerIn=clamp((keys.ArrowLeft?1:0)-(keys.ArrowRight?1:0)+g.steer+touch.steer,-1,1);
+  R.flipIn=clamp((keys.ArrowUp?1:0)-(keys.ArrowDown?1:0)+g.flip+touch.flip,-1,1);
+  R.rollIn=clamp((keys.KeyE?1:0)-(keys.KeyQ?1:0)+g.roll+touch.roll,-1,1);
+}
+
+// ---------- touch controls ----------
+const touch={steer:0,flip:0,roll:0,grab:{Indy:false,Melon:false,Nose:false,Tail:false},active:false};
+const isTouchDevice=('ontouchstart' in window)||(navigator.maxTouchPoints||0)>0;
+function enableTouch(){ if(touch.active)return; touch.active=true; document.body.classList.add('touch'); document.getElementById('touch').hidden=false; }
+{
+  const zone=document.getElementById('stick-zone'), base=document.getElementById('stick-base'), knob=document.getElementById('stick-knob');
+  let stickId=null, sx=0, sy=0; const RAD=50;
+  const dz=v=>Math.abs(v)<0.14?0:(v-Math.sign(v)*0.14)/(1-0.14);
+  function moveStick(e){ let dx=e.clientX-sx, dy=e.clientY-sy; const d=Math.hypot(dx,dy); if(d>RAD){dx*=RAD/d;dy*=RAD/d;} knob.style.transform=`translate(${dx}px,${dy}px)`; touch.steer=clamp(dz(-dx/RAD),-1,1); touch.flip=clamp(dz(-dy/RAD),-1,1); }
+  zone.addEventListener('pointerdown',e=>{ if(stickId!==null)return; stickId=e.pointerId; sx=e.clientX; sy=e.clientY; try{zone.setPointerCapture(e.pointerId);}catch(_){} base.style.left=sx+'px'; base.style.top=sy+'px'; base.hidden=false; knob.style.transform=''; touch.steer=0; touch.flip=0; begin(); e.preventDefault(); });
+  zone.addEventListener('pointermove',e=>{ if(e.pointerId===stickId)moveStick(e); });
+  const endStick=e=>{ if(e.pointerId!==stickId)return; stickId=null; touch.steer=0; touch.flip=0; base.hidden=true; knob.style.transform=''; };
+  zone.addEventListener('pointerup',endStick); zone.addEventListener('pointercancel',endStick); zone.addEventListener('lostpointercapture',endStick);
+  function bindHold(id,down,up){ const el=document.getElementById(id); let held=false;
+    const on=e=>{ if(held)return; held=true; try{el.setPointerCapture(e.pointerId);}catch(_){} el.classList.add('on'); begin(); down(); e.preventDefault(); };
+    const off=()=>{ if(!held)return; held=false; el.classList.remove('on'); up(); };
+    el.addEventListener('pointerdown',on); el.addEventListener('pointerup',off); el.addEventListener('pointercancel',off); el.addEventListener('lostpointercapture',off); el.addEventListener('contextmenu',e=>e.preventDefault()); }
+  bindHold('b-pop',()=>onDown('Space'),()=>onUp('Space'));
+  for(const k of ['Indy','Melon','Nose','Tail'])bindHold('b-'+k.toLowerCase(),()=>{touch.grab[k]=true;},()=>{touch.grab[k]=false;});
+  bindHold('b-tantrum',()=>{touch.roll=-1;},()=>{if(touch.roll<0)touch.roll=0;});
+  bindHold('b-frontflip',()=>{touch.roll=1;},()=>{if(touch.roll>0)touch.roll=0;});
+  bindHold('b-cam',()=>{cam.mode=1-cam.mode;},()=>{});
+  bindHold('b-reset',()=>{ if(!fade.active)fadeOut(()=>resetRider()); },()=>{});
+  document.getElementById('touch').addEventListener('contextmenu',e=>e.preventDefault());
+  if(isTouchDevice)enableTouch();
+  window.addEventListener('pointerdown',e=>{ if(e.pointerType==='touch')enableTouch(); },{passive:true});
+  window.addEventListener('blur',()=>{ touch.steer=touch.flip=touch.roll=0; for(const k in touch.grab)touch.grab[k]=false; });
 }
 
 // ---------- HUD ----------
@@ -838,7 +912,7 @@ function updateHUD(dt){
 
 // ---------- main loop ----------
 function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); spray.mat.uniforms.uScale.value=h*0.5; }
-addEventListener('resize',resize); resize(); setQuality(2);
+addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2);
 resetRider(); updateCamera(0,true); updateSessionHUD();
 Object.defineProperty(R,'switchStanceAtTakeoff',{get(){return R._sst;},set(v){R._sst=v;}}); R._sst=false;
 const _takeoff=takeoff; // record stance at takeoff for FS/BS naming
