@@ -8,7 +8,7 @@ What it does, in order:
      proportions) using the same weighting MPFB2 itself uses;
   2. fits MPFB2's 53-bone "game engine" skeleton to the morphed body and takes its skin weights;
   3. grows board shorts, an impact vest and boots out of the body surface (so they bend exactly like the skin),
-     and deletes the skin they hide; adds a helmet and sunglasses on the head bone;
+     and deletes the skin they hide; adds a helmet and a pair of Lobster sunglasses on the head bone;
   4. writes a skinned glTF binary (GLB), plus rider.js: the same bytes as base64, so index.html can load the
      model straight from disk without a web server.
 
@@ -45,12 +45,12 @@ SHORTS, SHORTS_STRIPE, WAISTBAND = srgb("#16304f"), srgb("#00b298"), srgb("#0b16
 VEST, VEST_SIDE, VEST_ZIP = srgb("#c81d25"), srgb("#1b1d22"), srgb("#e8e8e8")
 BOOT, BOOT_TRIM, BOOT_SOLE = srgb("#26282e"), srgb("#00b298"), srgb("#111214")
 HELMET, HELMET_TRIM = srgb("#eef0f2"), srgb("#1b1d22")
-LENS = srgb("#0d0f12")
+FRAME, LENS = srgb("#e6007e"), srgb("#ff7a1a")  # Lobster neon pink frame, orange mirror lens
 EYE = srgb("#d8d4cf")
 
 MATERIALS = {  # name: (roughness, metallic, double sided)
     "skin": (0.55, 0.0, False), "shorts": (0.82, 0.0, True), "vest": (0.72, 0.0, True),
-    "boots": (0.6, 0.0, True), "helmet": (0.38, 0.0, True), "glasses": (0.08, 0.3, True),
+    "boots": (0.6, 0.0, True), "helmet": (0.38, 0.0, True), "frame": (0.35, 0.0, True), "lens": (0.05, 0.85, True),
 }
 
 
@@ -392,29 +392,54 @@ def build(mpfb):
     shell(scalp, lambda p, n: np.full(len(p), 0.03), lambda p, n: paint(
         np.tile(HELMET, (len(p), 1)), HELMET_TRIM, smoothstep(0.018, 0.010, np.abs(p[:, 0]))), "helmet", 40)
 
-    # ---- sunglasses: a slim wraparound lens with a notch over the nose, and arms back to the ears ----
+    # ---- sunglasses, Lobster style: a slim mirrored wraparound lens with a notch over the nose, a pink brow bar
+    #      along its top edge, and pink arms back to the ears. The lens wraps round to the temples but never closer to
+    #      the face than LENS_GAP, and the arms trace the side of the head, so nothing ends up buried in the skin ----
+    face = P[body_v][headw[body_v] > 0.5]
+
+    def furthest(along, at, axis, lo, hi, sign=1):
+        """Furthest skin point along an axis (z: out from the face, x: out from the side of the head), sampled in a
+        thin slice through `at` on the other horizontal axis and between heights lo..hi. None if the slice is empty."""
+        other = 0 if axis == 2 else 2
+        sel = face[(np.abs(face[:, other] - at) < 0.006) & (face[:, 1] > lo) & (face[:, 1] < hi)]
+        return None if len(sel) == 0 else (sign * sel[:, axis]).max() * sign
+
+    LENS_GAP, ARM_GAP = 0.01, 0.003
     span = np.linalg.norm(leye - reye)
-    half = span / 2 + 0.034
-    gpos, gtris, cols = [], [], 17
+    half = span / 2 + 0.042
+    lpos, ltris, fpos, ftris, cols = [], [], [], [], 17
     for i in range(cols):
         t = -1 + 2 * i / (cols - 1)
         x, z = t * half, eye_c[2] + 0.036 - 0.07 * t * t  # wraps back toward the temples
+        skin = furthest(2, x, 2, eye_c[1] - 0.025, eye_c[1] + 0.02)
+        if skin is not None:
+            z = max(z, skin + LENS_GAP)
         top = eye_c[1] + 0.017 - 0.004 * t * t - 0.005 * np.exp(-(t / 0.1) ** 2)
         bot = eye_c[1] - 0.02 + 0.019 * np.exp(-(t / 0.13) ** 2) + 0.006 * t ** 4  # two lenses joined by a bridge
-        gpos += [[x, bot, z], [x, top, z]]
+        lpos += [[x, bot, z], [x, top, z]]
+        fpos += [[x, top - 0.003, z + 0.002], [x, top + 0.005, z + 0.002]]
     for i in range(cols - 1):
         a = 2 * i
-        gtris += [[a, a + 2, a + 1], [a + 1, a + 2, a + 3]]
-    for side in (-1, 1):  # arms
-        e = np.array(gpos[0 if side < 0 else 2 * cols - 2])
-        k = len(gpos)
-        y0 = eye_c[1] + 0.012
-        gpos += [[e[0], y0, e[2]], [e[0], y0 + 0.006, e[2]], [e[0] + side * 0.006, y0, e[2] - 0.095], [e[0] + side * 0.006, y0 + 0.006, e[2] - 0.095]]
-        gtris += [[k, k + 2, k + 1], [k + 1, k + 2, k + 3]]
-    gpos, gtris = np.array(gpos), np.array(gtris)
-    gw = np.zeros((len(gpos), len(order)), dtype=np.float32)
-    gw[:, bix["head"]] = 1
-    add_part("glasses", gpos, vertex_normals(gpos, gtris), np.tile(LENS, (len(gpos), 1)), gw, gtris)
+        ltris += [[a, a + 2, a + 1], [a + 1, a + 2, a + 3]]
+        ftris += [[a, a + 2, a + 1], [a + 1, a + 2, a + 3]]
+    y0 = eye_c[1] + 0.011
+    for side in (-1, 1):  # arms: a ribbon from the end of the lens back past the ear, just off the side of the head
+        e = np.array(lpos[0 if side < 0 else 2 * cols - 2])
+        k = len(fpos)
+        x = e[0]
+        for j, z in enumerate(np.linspace(e[2], e[2] - 0.1, 8)):
+            skin = furthest(0, z, 0, y0 - 0.012, y0 + 0.02, side)
+            if skin is not None:
+                x = side * max(side * x, side * skin + ARM_GAP)  # only ever outward, so the arm stays straight-ish
+            fpos += [[x, y0, z], [x, y0 + 0.008, z]]
+            if j:
+                a = k + 2 * (j - 1)
+                ftris += [[a, a + 2, a + 1], [a + 1, a + 2, a + 3]]
+    for name, pos, tris, colour in (("lens", lpos, ltris, LENS), ("frame", fpos, ftris, FRAME)):
+        pos, tris = np.array(pos), np.array(tris)
+        w = np.zeros((len(pos), len(order)), dtype=np.float32)
+        w[:, bix["head"]] = 1
+        add_part(name, pos, vertex_normals(pos, tris), np.tile(colour, (len(pos), 1)), w, tris)
 
     # numbers the game's pose code uses to put the soles on the board
     fl = in_body & (wsum("foot_l", "ball_l") > 0.5)
@@ -491,7 +516,7 @@ def write_glb(path, order, rig, head, parts, extras):
         nodes.append({"name": mat, "mesh": len(meshes) - 1, "skin": 0})
         nodes[0]["children"].append(len(nodes) - 1)
     gltf = {"asset": {"version": "2.0", "generator": "wake-session tools/build_rider.py",
-                      "copyright": "Body: MakeHuman base mesh and MPFB2 rig, CC0. Outfit: Wake Session."},
+                      "copyright": "Body: MakeHuman base mesh and MPFB2 rig, CC0. Outfit: Thursday Yacht Club."},
             "scene": 0, "scenes": [{"nodes": [0]}], "nodes": nodes, "meshes": meshes, "materials": materials,
             "skins": [skin], "accessors": accessors, "bufferViews": views, "buffers": [{"byteLength": len(buf)}]}
     js = json.dumps(gltf, separators=(",", ":")).encode()
