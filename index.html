@@ -1425,9 +1425,15 @@ function updateAudio(dt){
 // iframe, like the head unit under the dash, and the DJ panel is its remote. Each entry in DJ_SETS can be a track,
 // a set or a whole profile: next steps through the tracks inside one, then moves on to the next entry.
 // Use full soundcloud.com addresses: on.soundcloud.com share links don't always resolve inside the widget.
-const DJ_SETS=['https://soundcloud.com/paul-prouse'];
+// Paulie's picks first, then the rest of his profile.
+const DJ_SETS=[
+  'https://soundcloud.com/paul-prouse/ukg-vol2',
+  'https://soundcloud.com/paul-prouse/ukg-vol-5',
+  'https://soundcloud.com/paul-prouse/hard-techno-vol-3',
+  'https://soundcloud.com/paul-prouse',
+];
 const DJ_VOL=85;             // widget volume (0-100) with the camera on the boat; it eases off down the line
-const dj={w:null,ready:false,playing:false,want:false,failed:false,set:0,idx:0,n:0,pos:0,prog:0,vol:-1,glow:0,blockAt:0,errs:0,bootT:0,progT:0,url:''};
+const dj={w:null,ready:false,playing:false,want:false,failed:false,set:0,idx:0,n:0,pos:0,prog:0,vol:-1,glow:0,blockAt:0,errs:0,bootT:0,progT:0,url:'',gen:0,readyGen:-1};
 const djEl={panel:document.getElementById('dj'),title:document.getElementById('dj-title'),by:document.getElementById('dj-by'),art:document.getElementById('dj-art'),bar:document.getElementById('dj-bar'),play:document.getElementById('dj-play'),frame:document.getElementById('sc')};
 const djWidgetUrl=url=>'https://w.soundcloud.com/player/?'+new URLSearchParams({url,auto_play:'false',visual:'false',show_comments:'false',show_reposts:'false',show_teaser:'false',hide_related:'true',buying:'false',sharing:'false',download:'false',color:'#ffd166'});
 function djStatus(title,by,href){
@@ -1435,7 +1441,7 @@ function djStatus(title,by,href){
   if(href){ const a=document.createElement('a'); a.href=href; a.target='_blank'; a.rel='noopener'; a.textContent=by; djEl.by.append(a); } else djEl.by.textContent=by||'';
 }
 function djPanel(){ djEl.panel.classList.toggle('playing',dj.playing); djEl.play.setAttribute('aria-label',dj.playing?'Pause':'Play'); }
-function djFail(msg){ dj.failed=true; dj.ready=false; dj.playing=false; dj.blockAt=0; djPanel(); djStatus(msg,"Open Paulie's SoundCloud ↗",DJ_SETS[dj.set]); }
+function djFail(msg){ dj.failed=true; dj.ready=false; dj.playing=false; dj.blockAt=0; djPanel(); const u=DJ_SETS[dj.set], home=/^https:\/\/soundcloud\.com\/[^/?#]+/.exec(u); djStatus(msg,"Open Paulie's SoundCloud ↗",home?home[0]:u); }
 function djBoot(){
   const s=document.createElement('script'); s.src='https://w.soundcloud.com/player/api.js'; s.async=true;
   s.onload=()=>{ if(!window.SC||!SC.Widget){ djFail("Couldn't reach SoundCloud"); return; }
@@ -1453,15 +1459,18 @@ function djBind(){
   // A playlist usually moves on by itself. If nothing has started a moment after a tune ends (the end of the list,
   // or a widget that doesn't advance), Paulie puts the next one on: round to the top again, or on to the next set.
   w.bind(E.FINISH,()=>{ dj.playing=false; djPanel(); setTimeout(()=>{ if(dj.want && !dj.playing)djNext(); },2500); });
-  w.bind(E.ERROR,()=>{ if(!dj.ready){ djFail("Couldn't find Paulie's tunes"); return; } if(++dj.errs<=dj.n)djNext(); });
+  // a tune or link that won't play is skipped; only give up once every entry has had a go
+  w.bind(E.ERROR,()=>{ if(++dj.errs>DJ_SETS.length+dj.n){ djFail("Couldn't play Paulie's tunes"); return; }
+    if(dj.ready){ if(dj.want)djNext(); } else if(DJ_SETS.length>1)djLoadSet(dj.set+1); else djFail("Couldn't find Paulie's tunes"); });
 }
 function djReady(){
-  clearTimeout(dj.bootT);
+  if(dj.readyGen===dj.gen)return;   // the load callback and the READY event both report in; take the first
+  dj.readyGen=dj.gen; clearTimeout(dj.bootT);
   dj.w.getSounds(list=>{
     dj.n=(list||[]).length;
-    if(!dj.n){ djFail("Couldn't find Paulie's tunes"); return; }
+    if(!dj.n){ if(DJ_SETS.length>1 && ++dj.errs<=DJ_SETS.length)djLoadSet(dj.set+1); else djFail("Couldn't find Paulie's tunes"); return; }
     dj.ready=true; dj.failed=false; dj.vol=-1;
-    if(dj.want)djPlay(); else djStatus('Starts when you take the handle',`${dj.n} tune${dj.n>1?'s':''} on SoundCloud`);
+    if(dj.want)djPlay(); else djStatus('Starts when you take the handle',DJ_SETS.length>1?"Paulie's mixes on SoundCloud":`${dj.n} tune${dj.n>1?'s':''} on SoundCloud`);
   });
 }
 function djNowPlaying(){
@@ -1491,20 +1500,20 @@ function djPlay(){
 function djPause(){ dj.want=false; dj.blockAt=0; if(dj.ready)dj.w.pause(); }
 function djToggle(){ if(dj.playing||(dj.want&&dj.blockAt))djPause(); else djPlay(); }
 function djLoadSet(i){
-  dj.set=(i+DJ_SETS.length)%DJ_SETS.length; dj.ready=false; dj.want=true; dj.idx=0; dj.pos=0; dj.prog=0;
-  djStatus('Tuning in…','Paulie is changing records');
-  dj.w.load(DJ_SETS[dj.set],{auto_play:true,visual:false,show_comments:false,show_reposts:false,show_teaser:false,hide_related:true,buying:false,sharing:false,download:false,color:'#ffd166',callback:djReady});
+  dj.set=(i+DJ_SETS.length)%DJ_SETS.length; dj.gen++; dj.ready=false; dj.idx=0; dj.pos=0; dj.prog=0;
+  djStatus('Tuning in…','Paulie is changing records');   // djReady sets the volume and then plays
+  dj.w.load(DJ_SETS[dj.set],{auto_play:false,visual:false,show_comments:false,show_reposts:false,show_teaser:false,hide_related:true,buying:false,sharing:false,download:false,color:'#ffd166',callback:djReady});
 }
 function djSkip(i){ dj.idx=i; dj.pos=0; dj.prog=0; dj.want=true; dj.w.skip(i); djVolume(); dj.w.play(); dj.blockAt=performance.now()+4000; }
 function djNext(){
-  if(!dj.ready)return;
+  if(!dj.ready)return; dj.want=true;
   if(dj.idx<dj.n-1)djSkip(dj.idx+1);
   else if(DJ_SETS.length>1)djLoadSet(dj.set+1);
   else if(dj.n>1)djSkip(0);
   else { dj.w.seekTo(0); djPlay(); }
 }
 function djPrev(){
-  if(!dj.ready)return;
+  if(!dj.ready)return; dj.want=true;
   if(dj.pos>4000||(dj.idx===0&&DJ_SETS.length===1&&dj.n===1)){ dj.w.seekTo(0); djPlay(); }   // a few seconds in, back to the top of this tune
   else if(dj.idx>0)djSkip(dj.idx-1);
   else if(DJ_SETS.length>1)djLoadSet(dj.set-1);
