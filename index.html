@@ -750,7 +750,27 @@ const FACING=-1; // regular stance: chest faces local -x
 let LEG=0.47; const BOARD_C=V3(0,0.07,0); // thigh/shin length and ankle centre; the skinned model swaps in its own
 // where each grab takes hold of the board: indy/tail with the back hand, melon/nose with the front
 const GRAB_PT={Indy:V3(FACING*0.22,0.05,-0.08),Tail:V3(0,0.05,-0.67),Melon:V3(-FACING*0.22,0.05,0.08),Nose:V3(0,0.05,0.67)};
-const _b=V3(), _pt=V3(), _pd=V3(), _hx=V3(), _hy=V3(), _hm=new THREE.Matrix4();
+const _b=V3(), _pt=V3(), _pd=V3(), _hx=V3(), _hy=V3(), _hm=new THREE.Matrix4(), _hf=V3(), _hd=V3();
+// The grip: chest and shoulders square to the handle, both hands overhand a little either side of centre, arms at one
+// fixed reach with a slight bend. When the rider hangs back or crouches it's the body that moves; the arms never
+// stretch or fold to chase the bar, so the handle ends up low in front of the belly, where riders hold it.
+const GRIP_HALF=0.09, ARM_DROP=40*DEG; // half the gap between the hands; how far below "straight out from the chest" the arms point
+function handleAt(sh,torso,C,reach,shHalf,out){
+  _hf.copy(C).addScaledVector(torso,-C.dot(torso)).normalize();                            // straight out from the chest
+  _hf.multiplyScalar(Math.cos(ARM_DROP)).addScaledVector(torso,-Math.sin(ARM_DROP));       // tipped down toward the belly
+  const d=shHalf-GRIP_HALF; return out.copy(sh).addScaledVector(_hf,Math.sqrt(Math.max(0.01,reach*reach-d*d)));
+}
+// hands on the bar, unless a grab or a bail takes them off it; never further from a shoulder than the arm can reach
+function placeHands(p,shF,shB,armMax){
+  J.handF.copy(J.handle).addScaledVector(J.handleAxis,GRIP_HALF); J.handB.copy(J.handle).addScaledVector(J.handleAxis,-GRIP_HALF);
+  const g=p.grabs, ease=t=>clamp(t,0,1);
+  if(g.Indy>0)J.handB.lerp(GRAB_PT.Indy,ease(g.Indy));
+  if(g.Tail>0)J.handB.lerp(GRAB_PT.Tail,ease(g.Tail));
+  if(g.Melon>0)J.handF.lerp(GRAB_PT.Melon,ease(g.Melon));
+  if(g.Nose>0)J.handF.lerp(GRAB_PT.Nose,ease(g.Nose));
+  if(p.bail>0){J.handF.copy(J.shF).add(_hd.set(Math.sin(p.bail*11)*0.5,0.2+Math.cos(p.bail*8)*0.4,0.3));J.handB.copy(J.shB).add(_hd.set(Math.cos(p.bail*9)*0.5,0.1+Math.sin(p.bail*10)*0.4,-0.3));}
+  for(const [h,sh] of [[J.handF,shF],[J.handB,shB]]){ _hd.subVectors(h,sh); const L=_hd.length(); if(L>armMax)h.copy(sh).addScaledVector(_hd,armMax/L); }
+}
 function solvePose(p){
   const c=p.crouch, B=p.axis;
   // Hips sit on the line from the board to the centre of mass (p.axis), dropping and sitting back as the knees bend.
@@ -771,30 +791,20 @@ function solvePose(p){
   // a grab folds the body at the waist toward the hand's target on the board
   const g=p.grabs; let gw=0; _pt.set(0,0,0);
   for(const k in GRAB_PT){ const w=clamp(g[k],0,1); if(w>0){ gw=Math.max(gw,w); _pt.addScaledVector(GRAB_PT[k],w); } }
-  if(gw>0){ _pt.sub(J.hips); _pt.y=0; if(_pt.lengthSq()>1e-4)torsoDir.addScaledVector(_pt.normalize(),0.6*gw); torsoDir.addScaledVector(C,0.35*gw); }
+  if(gw>0){ _pt.sub(J.hips); _pt.y=0; if(_pt.lengthSq()>1e-4)torsoDir.addScaledVector(_pt.normalize(),1.0*gw); torsoDir.addScaledVector(C,0.3*gw); }
   if(p.bail>0){torsoDir.x+=Math.sin(p.bail*9)*0.6;torsoDir.z+=Math.cos(p.bail*7)*0.6;}
   torsoDir.normalize();
   J.sh.copy(J.hips).addScaledVector(torsoDir,0.5);
-  const axis=J.axis.crossVectors(torsoDir,C).normalize(); if(axis.z<0)axis.negate();
+  const axis=J.axis.crossVectors(torsoDir,C).normalize(); // the rider's left; with the regular stance that's the front shoulder
   J.shF.copy(J.sh).addScaledVector(axis,0.19); J.shB.copy(J.sh).addScaledVector(axis,-0.19);
   J.head.copy(J.sh).addScaledVector(torsoDir,0.21).addScaledVector(C,0.03);
-  // handle: low and close, just ahead of the front hip on the line to the tow point, bar level and across the rope
+  // handle squared to the chest at the arms' reach, the bar parallel to the shoulders (see handleAt)
   if(p.handleFree){ J.handle.copy(p.handle); J.handleAxis.copy(p.handleAxis); }
-  else {
-    J.handle.copy(J.hips).addScaledVector(toPyl,p.reach).addScaledVector(C,0.06); J.handle.z+=0.06;
-    _pt.copy(p.pylon).sub(J.handle).normalize(); J.handleAxis.crossVectors(p.up,_pt).normalize();
-  }
-  // hands a fist apart; the back hand reaches across the body to the chest-side end of the bar
-  const hA=J.handleAxis; const sgn=hA.dot(C)>=0?1:-1;
-  J.handB.copy(J.handle).addScaledVector(hA,0.075*sgn); J.handF.copy(J.handle).addScaledVector(hA,-0.075*sgn);
-  const tmp=V3(), ease=t=>clamp(t,0,1);
-  if(g.Indy>0)J.handB.lerp(GRAB_PT.Indy,ease(g.Indy));
-  if(g.Tail>0)J.handB.lerp(GRAB_PT.Tail,ease(g.Tail));
-  if(g.Melon>0)J.handF.lerp(GRAB_PT.Melon,ease(g.Melon));
-  if(g.Nose>0)J.handF.lerp(GRAB_PT.Nose,ease(g.Nose));
-  if(p.bail>0){J.handF.copy(J.shF).add(tmp.set(Math.sin(p.bail*11)*0.5,0.2+Math.cos(p.bail*8)*0.4,0.3));J.handB.copy(J.shB).add(tmp.set(Math.cos(p.bail*9)*0.5,0.1+Math.sin(p.bail*10)*0.4,-0.3));}
-  const poleF=V3().copy(C).multiplyScalar(-0.5).addScaledVector(UP,-0.6).addScaledVector(axis,0.5);
-  const poleB=V3().copy(C).multiplyScalar(-0.5).addScaledVector(UP,-0.6).addScaledVector(axis,-0.5);
+  else { handleAt(J.sh,torsoDir,C,p.armReach,0.19,J.handle); J.handleAxis.copy(axis); }
+  placeHands(p,J.shF,J.shB,0.57);
+  // elbows hang down and a little out
+  const poleF=V3().copy(torsoDir).multiplyScalar(-0.8).addScaledVector(axis,0.45);
+  const poleB=V3().copy(torsoDir).multiplyScalar(-0.8).addScaledVector(axis,-0.45);
   ik2(J.shF,J.handF,0.29,0.28,poleF,J.elF); ik2(J.shB,J.handB,0.29,0.28,poleB,J.elB); J.poleF.copy(poleF); J.poleB.copy(poleB);
   // head turns toward what the rider is watching, as far as a neck allows (about 80° either side of the chest)
   const look=J.look.copy(p.look).sub(J.head).normalize();
@@ -852,6 +862,7 @@ function setupRig(gltf){
     ['thigh_l','calf_l'],['calf_l','foot_l'],['thigh_r','calf_r'],['calf_r','foot_r']]) R.rd[a]=dir(a,b);
   const len=(a,b)=>rest[a].distanceTo(rest[b]);
   R.arm1=len('upperarm_l','lowerarm_l'); R.arm2=len('lowerarm_l','hand_l'); R.leg1=len('thigh_l','calf_l'); R.leg2=len('calf_l','foot_l');
+  R.reach=(R.arm1+R.arm2)*0.96+0.075; // shoulder to the middle of the grip, elbows slightly bent
   for(const s of ['l','r']){
     // back of the hand at rest (the thumb sits on the palm side), and the axis each finger folds about toward the palm
     const h=rest['hand_'+s], f=dir('hand_'+s,'middle_01_'+s), k=dir('pinky_01_'+s,'index_01_'+s);
@@ -877,7 +888,9 @@ function fk(name){ const b=RIG.bones[name]; return RIG.wp[name].copy(b.position)
 const FINGER_CURL=[60,75,45], THUMB_CURL=[15,30,25]; // degrees each finger joint folds round the handle
 function driveRig(dt){
   const R=RIG, B=R.bones, q=_rq;
-  const axis=toM(poseParams.axis,_r1), torso=toM(J.torsoDir,_r2), hipL=toM(_r3.subVectors(J.hipF,J.hipB),_r3), shL=toM(J.axis,_r4);
+  const axis=toM(poseParams.axis,_r1), torso=toM(J.torsoDir,_r2), shL=toM(J.axis,_r4);
+  // the hips open part of the way toward the handle; the spine takes the rest of the twist up to the squared shoulders
+  const hipL=toM(_r3.subVectors(J.hipF,J.hipB),_r3).normalize().lerp(shL,0.4).normalize();
   // hips and spine: the pelvis follows the legs' line, the spine bends from it toward the torso, twisting from hips to shoulders
   B.Root.quaternion.identity(); R.wq.Root.identity();
   const mixUp=(t,out)=>out.copy(axis).lerp(torso,t).normalize(), mixL=(t,out)=>out.copy(hipL).lerp(shL,t).normalize();
@@ -906,6 +919,13 @@ function driveRig(dt){
     frameQuat(R.rd['calf_'+s],RZ,_r8.subVectors(A,K),kneeFwd,q); setWorld('calf_'+s,q); fk('foot_'+s);
     frameQuat(R['footFwd_'+s],RY,toM(toes,_r8),up,q); setWorld('foot_'+s,q); setWorld('ball_'+s,q);
   }
+  // the handle at the model's own reach from its real shoulders, so the arms keep the same slight bend
+  const SL=R.wp.upperarm_l, SR=R.wp.upperarm_r, shMid=_r5.addVectors(SL,SR).multiplyScalar(0.5);
+  if(!poseParams.handleFree){
+    handleAt(shMid,torso,toM(J.C,_r6),R.reach,SL.distanceTo(SR)/2,_r7);
+    J.handle.copy(_r7).applyQuaternion(R.holder.quaternion);
+  }
+  placeHands(poseParams,_r8.copy(SL).applyQuaternion(R.holder.quaternion),_r6.copy(SR).applyQuaternion(R.holder.quaternion),R.reach);
   // arms: wrist a palm's width short of the grip point, elbow toward the solver's pole, back of the hand up on the bar
   R.grip=damp(R.grip,poseParams.bail>0?0.15:1,8,dt);
   for(const [s,hand,pole] of [['l',J.handF,J.poleF],['r',J.handB,J.poleB]]){
@@ -1132,7 +1152,7 @@ function sprayBurst(p,n,power){n=Math.round(n*2.2);for(let i=0;i<n;i++){const a=
 // ---------- visuals per frame ----------
 const _tiltQ=new THREE.Quaternion(),_yawQ=new THREE.Quaternion(),_tmpQ=new THREE.Quaternion(),_e=new THREE.Euler();
 const handleW=V3(),handleAxisW=V3(),_v=V3(),_v2=V3(),_invQ=new THREE.Quaternion();
-const poseParams={crouch:0.3,twist:0.35,axis:V3(0,1,0),axisVel:V3(),reach:0.26,pylon:V3(),up:V3(0,1,0),look:V3(),handle:V3(),handleAxis:V3(0,0,1),handleFree:false,grabs:R.grabVis,bail:0};
+const poseParams={crouch:0.3,twist:0.85,axis:V3(0,1,0),axisVel:V3(),armReach:0.57*0.96,pylon:V3(),up:V3(0,1,0),look:V3(),handle:V3(),handleAxis:V3(0,0,1),handleFree:false,grabs:R.grabVis,bail:0};
 const LEAN_MAX=55*DEG, BODY_W=9, BODY_Z=0.75; // how far a rider can hang off the board, and how quickly the body follows the forces
 function updateRiderVisual(dt){
   rider.position.copy(R.pos);
@@ -1179,11 +1199,11 @@ function updateRiderVisual(dt){
   const anyGrab=Object.values(R.grabVis).some(v=>v>0.3);
   let crouchT;
   // legs soak up the wake: they fold as the face shoves the board up, and extend as the surface drops away
-  if(R.state==='riding')crouchT=0.34+0.45*R.load+0.55*R.landComp+0.12*Math.abs(R.steer)+clamp((R.fw.y/G-1)*0.25,-0.12,0.3);
-  else if(R.state==='air')crouchT=anyGrab?0.8:0.42;
+  if(R.state==='riding')crouchT=0.42+0.4*R.load+0.55*R.landComp+0.12*Math.abs(R.steer)+clamp((R.fw.y/G-1)*0.25,-0.12,0.3);
+  else if(R.state==='air')crouchT=anyGrab?1.5:0.8; // knees come up in the air; a grab is a full tuck, board pulled to the hand
   else crouchT=0.6;
-  poseParams.crouch=damp(poseParams.crouch,clamp(crouchT,0,1),R.state==='riding'?9:6,dt);
-  poseParams.twist=damp(poseParams.twist,R.state==='air'?0.25:0.35,5,dt);
+  poseParams.crouch=damp(poseParams.crouch,clamp(crouchT,0,1.6),R.state==='riding'?9:6,dt);
+  poseParams.twist=damp(poseParams.twist,R.state==='air'?0.8:0.85,5,dt); // how far the chest turns from sideways to face the handle
   poseParams.bail=R.state==='bail'?R.bailT:0;
   solvePose(poseParams);
   if(RIG.ready)driveRig(dt);
