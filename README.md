@@ -33,11 +33,11 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 
 ## How it works
 
-- **Water** is one analytic surface sampled by both the shader and the physics from the same formula: a boat-frame V wake with a steep outer ramp and a trough behind the lip, prop wash, and ambient chop. On top of that the shader adds multi-octave ripple normals, a planar reflection of the boat, rider, shore and sky (mip-blurred with distance so far water smears the reflection like real chop), GGX sun glitter, crest translucency, and foam broken up by noise with the prop wash streaked along the boat's track. The water receives real shadow maps from the rider and boat.
+- **Water** is one analytic surface sampled by both the shader and the physics from the same formula: a boat-frame V wake whose outside is a ramp that steepens to a crisp lip (about 30° where a 65 ft line puts you), a steep inside face, a trough about half as deep as the crest is tall, prop wash, and ambient chop. The wake is tallest about 18 m behind the stern. On top of that the shader adds multi-octave ripple normals, a planar reflection of the boat, rider, shore and sky (mip-blurred with distance so far water smears the reflection like real chop), GGX sun glitter, crest translucency, and foam broken up by noise with the prop wash streaked along the boat's track. The water receives real shadow maps from the rider and boat.
 - **Lighting** is linear HDR. The scene renders into a multisampled offscreen target and a post pass adds bloom, ACES tone mapping, a mild grade, vignette and grain. An analytic sky with a procedural cloud layer doubles as the environment map, so gelcoat, skin and the wet board pick up proper reflections.
 - **Shoreline** sits 76 m either side of the course: sand, grass and a few thousand instanced trees, built three periods long so the whole bank snaps forward seamlessly as the boat travels. Hazy ridges close the horizon.
-- **Rope** is an inelastic constraint to the tower pylon. Cutting out and releasing gives the real pendulum effect, so a progressive edge into the wake builds speed past the boat.
-- **Takeoff** happens when the ramp falls away faster than gravity can follow. Air height comes from how hard you edge in; a well-timed pop adds to it.
+- **Rope** is a stiff spring that only pulls (a poly-E line stretches 2–3% under a hard cut). It goes slack when you run at the boat and snaps tight with a jolt; pull more than 2.8 times your body weight and the handle is gone. The HUD shows the line load. Cutting out and edging back in gives the real pendulum effect, and the edge's side force comes with drag, so a rider tops out around 1.2–1.35 times boat speed.
+- **Takeoff** happens at the lip, where the surface falls away faster than gravity can follow, and the board leaves with the speed it had going up the ramp. Relaxed legs soak up about 2.4 m/s of that, so cutting out over the wake is just a bump. Hold Space and you stand tall through the lip; let go partway up the ramp and your legs extend through it, adding 0.5–1.5 m/s. Let go on flat water and it's an ollie.
 - **Rider** is a small IK rig posed from the physics. The body leans along the force the water puts on the board, so it hangs back against the rope and tips into a cut, and it is sprung rather than snapped so it carries weight. The handle sits low at the front hip, the legs soak up a wake face and extend as it drops away, grabs fold the body at the waist, and the head watches the boat or the landing. The board edges and tilts to the surface normal.
 - **Cameras**: a close follow cam, a long-lens chase from about 24 m back (the compressed look of wake films), and the boat's tower. Hard landings and falls jolt the camera unless the system asks for reduced motion.
 - **Landing** checks rotation against the nearest 180 or 360, impact speed, and whether you cased the second wake. A gentle assist helps only when you are already within 45° of clean.
@@ -45,6 +45,14 @@ Keyboard, gamepad or touch. Sound starts on the first input. On a phone, landsca
 - **Performance** scales automatically: water mesh density, render resolution, shader detail, reflection resolution, bloom, shadow map size and tree density step down when frames run long and back up with headroom. Low quality drops the reflection pass and uses the analytic sky instead.
 
 ## Tuning
+
+`tools/jump_bench.py` runs the game's own physics headless through scripted wake jumps (relaxed, standing tall, popped), checks them against real-world targets (airtime, height above the lip, rider speed, line load) and draws the jump arcs over the wake:
+
+```bash
+pip install playwright matplotlib numpy && playwright install chromium
+python tools/jump_bench.py        # table in the terminal, plot in tools/out/jump_bench.png
+```
+
 
 The physics constants sit at the top of the script in `index.html`: boat speed, rope length, edge grip and cap, drag, pop strength, spin and flip rates. The wake shape is the `wake()` function, written once in GLSL and once in JavaScript; keep the two in step.
 

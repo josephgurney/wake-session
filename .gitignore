@@ -1,3 +1,5 @@
 .DS_Store
 server.log
 .claude/
+tools/out/
+__pycache__/

@@ -109,6 +109,7 @@ body.touch .card .grid.tc{display:grid}
   <div class="panel tr">
     <div class="big"><span id="speed">0</span><span>mph</span></div>
     <div class="small"><b>65 ft</b> rope · boat <b>21 mph</b></div>
+    <div class="small">line load <b id="line">0.0×</b> body weight</div>
     <div class="small" id="quality">quality: high (auto)</div>
     <div id="airline"></div>
   </div>
@@ -187,8 +188,12 @@ const ROPE_LEN=19.8;         // 65 ft
 const PYLON_H=2.35, PYLON_Z=-0.4, STERN_OFF=3.3;
 const EDGE_MAX=30*DEG;       // max board yaw relative to travel
 const EDGE_ROLL=40*DEG;      // visual edge angle at full input
-const GRIP=8.5, A_MAX=8.5, DRAG=0.03;
+const GRIP=8.5, A_MAX=8.5, DRAG=0.03, EDGE_LD=3.0; // the edge's side force comes with drag, like a keel: lift/drag ratio
 const SPIN_ACC=1500, SPIN_MAX=700, SPIN_DECAY=8;
+const RIDER_M=80;            // rider plus board, kg
+const ROPE_K=2000, ROPE_C=240; // poly-E line: stretches 2-3% under a hard cut; damped by the arms and body
+const HANDLE_MAX=2.8;        // line pull, in body weights, that rips the handle out of the rider's hands
+const ABSORB=2.4;            // vertical speed (m/s) relaxed legs soak up going over a wake, like skiing moguls
 const FLIP_ACC=1000, FLIP_MAX=520, FLIP_DECAY=5.5;
 
 // ---------- water surface (shared CPU/GPU) ----------
@@ -196,23 +201,32 @@ const WAKE_GLSL = `
 vec2 wake(float u, float d){
   if (d <= 0.0) return vec2(0.0);
   float xc = 0.9 + d*0.10510;
-  float A = 1.15*(d/(d+3.0))*exp(-d/45.0);
+  float A = 0.62*(d/18.0)*exp(1.0 - d/18.0);
+  float W = 1.2 + 0.04*d;
   float s = abs(u) - xc;
-  float h = (s < 0.0) ? exp(-s*s/0.81) : exp(-s*s/1.96);
-  float t = s + 1.6;
-  h -= 0.4*exp(-t*t/0.81);
+  float h = 0.0;
+  if (s < 0.0) h = exp(-s*s/0.30);
+  else if (s < W) { float r = 1.0 - s/W; h = r*r; }
+  float t = s + 1.2;
+  h -= 0.5*exp(-t*t/0.5);
   return vec2(A*h, h);
 }
 float ambient(float x, float z, float t){
   return 0.045*sin(x*0.5+z*0.25+t*1.1) + 0.035*sin(x*0.22-z*0.45+t*0.8) + 0.015*sin((x+z)*1.2+t*2.0);
 }`;
+// Cross-section of one wake: outside, a ramp that gets steeper right up to a crisp lip (about 30 degrees at the
+// rider's distance), so the board leaves at the top instead of rolling off a rounded shoulder; inside, a steep face
+// dropping into a trough. Height peaks about 18 m behind the stern, where a 65 ft line puts the rider.
 function wakeH(u,d){
   if(d<=0) return 0;
   const xc=0.9+d*0.10510;
-  const A=1.15*(d/(d+3))*Math.exp(-d/45);
+  const A=0.62*(d/18)*Math.exp(1-d/18);
+  const W=1.2+0.04*d;
   const s=Math.abs(u)-xc;
-  let h = s<0 ? Math.exp(-s*s/0.81) : Math.exp(-s*s/1.96);
-  const t=s+1.6; h-=0.4*Math.exp(-t*t/0.81);
+  let h=0;
+  if(s<0) h=Math.exp(-s*s/0.30);
+  else if(s<W){ const r=1-s/W; h=r*r; }
+  const t=s+1.2; h-=0.5*Math.exp(-t*t/0.5);
   return A*h;
 }
 const crestX = d => 0.9 + Math.max(0,d)*0.10510;
@@ -839,7 +853,7 @@ const R={
   state:'riding', pos:V3(), vel:V3(0,0,BOAT_SPEED), steer:0, steerIn:0, flipIn:0, rollIn:0,
   travelYaw:0, boardYaw:0, switchStance:false,
   spin:0, spinVel:0, flip:0, flipVel:0, roll:0, rollVel:0,
-  load:0, loading:false, popRequest:false, ropeTaut:true,
+  load:0, loading:false, popRequest:false, ropeTaut:true, tension:0, overload:0, popArm:0, popT:0,
   vySurf:0, airT:0, bailT:0, maxH:0, takeoffU:0, takeoffWake:false, takeoffYaw:0,
   grabs:{Indy:0,Melon:0,Nose:0,Tail:0}, grabHeld:{Indy:false,Melon:false,Nose:false,Tail:false}, grabVis:{Indy:0,Melon:0,Nose:0,Tail:0},
   nrm:V3(0,1,0), fw:V3(0,G,0), crouch:0.3, landComp:0, quat:new THREE.Quaternion(), baseQuat:new THREE.Quaternion(), renderQuat:new THREE.Quaternion(),
@@ -847,26 +861,30 @@ const R={
 };
 const SESSION={score:0,best:0,bestName:'none yet',falls:0};
 const _rr=V3(), _fw=V3();
-function applyRope(p){
-  _rr.copy(R.pos).sub(p); const dist=_rr.length();
-  if(dist>ROPE_LEN){_rr.multiplyScalar(1/dist); R.pos.copy(p).addScaledVector(_rr,ROPE_LEN+(dist-ROPE_LEN)*0.12);
-    const rel=R.vel.x*_rr.x+R.vel.y*_rr.y+(R.vel.z-BOAT_SPEED)*_rr.z; if(rel>0)R.vel.addScaledVector(_rr,-rel); R.ropeTaut=true;}
-  else R.ropeTaut=false;
+// The line is a stiff spring that only pulls: it stretches a little under load, goes slack when the rider runs
+// toward the boat, and snaps tight again with a jolt. R.tension is the pull in newtons.
+function applyRope(p,dt){
+  _rr.copy(R.pos).sub(p); const dist=_rr.length(); _rr.multiplyScalar(1/dist);
+  const stretch=dist-ROPE_LEN, rate=R.vel.x*_rr.x+R.vel.y*_rr.y+(R.vel.z-BOAT_SPEED)*_rr.z;
+  const T=stretch>0?Math.max(0,ROPE_K*stretch+ROPE_C*rate):0;
+  R.vel.addScaledVector(_rr,-T/RIDER_M*dt); R.tension=T; R.ropeTaut=T>0;
+  // too much pull and the handle is gone
+  R.overload=T>HANDLE_MAX*RIDER_M*G?R.overload+dt:0;
 }
 function resetRider(){
   const p=pylonPos();
   R.state='riding'; R.pos.set(0,0,p.z-Math.sqrt(ROPE_LEN*ROPE_LEN-PYLON_H*PYLON_H)); R.vel.set(0,0,BOAT_SPEED);
   R.steer=0; R.spin=R.flip=R.roll=0; R.spinVel=R.flipVel=R.rollVel=0; R.switchStance=false; R.travelYaw=0; R.boardYaw=0;
-  R.load=0; R.loading=false; R.popRequest=false; R.airT=0; R.vySurf=0; R.bailT=0; R.landComp=0;
+  R.load=0; R.loading=false; R.popRequest=false; R.airT=0; R.vySurf=0; R.bailT=0; R.landComp=0; R.tension=0; R.overload=0; R.popArm=0; R.popT=0;
   for(const k in R.grabs)R.grabs[k]=0;
   R.renderQuat.identity(); R.baseQuat.identity();
   R.fw.set(0,G,0); poseParams.axis.copy(UP); poseParams.axisVel.set(0,0,0); cam.trauma=0;
 }
-function takeoff(vy){
+function takeoff(vy,popped){
   R.state='air'; R.airT=0; R.vel.y=vy; R.spin=R.flip=R.roll=0; R.spinVel=R.flipVel=R.rollVel=0; R.maxH=0;
   R.takeoffU=R.pos.x; R.takeoffWake=Math.abs(wakeH(R.pos.x,boatZ-STERN_OFF-R.pos.z))>0.12;
   R.takeoffYaw=R.boardYaw+(R.switchStance?Math.PI:0);
-  R.baseQuat.copy(R.renderQuat); R.loading=false; R.load=0; R.popped=vy>R.vySurf+0.3; R.spinArmed=R.steerIn===0;
+  R.baseQuat.copy(R.renderQuat); R.loading=false; R.load=0; R.popped=!!popped; R.spinArmed=R.steerIn===0;
   for(const k in R.grabs)R.grabs[k]=0;
   if(AC){sprayBurst(R.pos,18,0.6);}
 }
@@ -889,25 +907,35 @@ function stepRider(dt){
     const grip=GRIP*(0.3+0.7*Math.abs(R.steer));
     const aLat=clamp(-grip*vlat,-A_MAX,A_MAX);
     R.vel.x+=nx*aLat*dt; R.vel.z+=nz*aLat*dt;
-    const along=vx*hx+vz*hz; const dragA=DRAG*along*Math.abs(along)+0.5*Math.sign(along);
+    const along=vx*hx+vz*hz; const dragA=DRAG*along*Math.abs(along)+(0.5+Math.abs(aLat)/EDGE_LD)*Math.sign(along);
     R.vel.x-=hx*dragA*dt; R.vel.z-=hz*dragA*dt;
-    R.vel.y=0; R.pos.x+=R.vel.x*dt; R.pos.z+=R.vel.z*dt;
-    applyRope(pyl); R.vel.y=0;
+    applyRope(pyl,dt); R.vel.y=0; R.pos.x+=R.vel.x*dt; R.pos.z+=R.vel.z*dt;
     if(R.loading)R.load=Math.min(1,R.load+dt/0.7);
     const hNow=waterAt(R.pos.x,R.pos.z,boatZ,simTime);
     const hNext=waterAt(R.pos.x+R.vel.x*dt,R.pos.z+R.vel.z*dt,boatZ+BOAT_SPEED*dt,simTime+dt);
-    const vyS=(hNext-hNow)/dt; const aReq=(vyS-R.vySurf)/dt; R.vySurf=vyS;
+    const vyS=(hNext-hNow)/dt; const aReq=(vyS-R.vySurf)/dt; const vyUp=R.vySurf; R.vySurf=vyS;
     R.pos.y=hNow; surfaceNormal(R.pos.x,R.pos.z,boatZ,simTime,R.nrm);
     // force the water puts on the board, per kg: grip, drag and support (including the shove up a wake face).
     // For the rider to balance, their centre of mass has to sit on this line, so the pose leans along it.
     _fw.set(nx*aLat-hx*dragA, G+clamp(aReq,-G,3*G), nz*aLat-hz*dragA); R.fw.lerp(_fw,1-Math.exp(-dt/0.06));
     R.landComp=Math.max(0,R.landComp-dt*2.2);
-    if(R.popRequest){R.popRequest=false; takeoff(Math.max(vyS,0)+0.9+2.3*R.load); R.load=0;}
-    else if(vyS>2.0 && aReq<-G) takeoff(vyS*0.8);
+    // Pop: let go on the way up a wake and the legs extend through the lip, adding 0.5-1.5 m/s for the next
+    // ~0.35 s; let go on flat water and it's an ollie. The wake does most of the lifting: when the surface
+    // drops away faster than gravity (the lip), the board leaves with the speed it had going up the ramp.
+    R.popT=Math.max(0,R.popT-dt);
+    if(R.popRequest){ R.popRequest=false;
+      if(vyS>0.8){ R.popArm=0.5+1.0*R.load; R.popT=0.35; R.load=0; }
+      else { takeoff(Math.max(vyS,0)+1.6+1.4*R.load,true); R.load=0; } }
+    // A committed rider (loading, or popping) stands tall and keeps all of the ramp's lift; a relaxed one soaks it up.
+    if(R.state==='riding' && vyUp>1.5 && aReq<-G){
+      const pop=R.popT>0?R.popArm:0, vy=vyUp-((R.loading||pop>0)?0:ABSORB)+pop;
+      if(vy>0.8){ takeoff(vy,pop>0); R.popT=0; } }
+    if(R.state==='riding' && R.overload>0.05) bail('Lost the handle');
     return;
   }
   if(R.state==='air'){
-    R.airT+=dt; R.vel.y-=G*dt; R.pos.addScaledVector(R.vel,dt); applyRope(pyl);
+    R.airT+=dt; R.vel.y-=G*dt; applyRope(pyl,dt); R.pos.addScaledVector(R.vel,dt);
+    if(R.overload>0.05){ bail('Lost the handle'); return; }
     const sp=Math.hypot(R.vel.x,R.vel.z); if(sp>0.5)R.travelYaw=Math.atan2(R.vel.x,R.vel.z);
     const hGround=waterAt(R.pos.x,R.pos.z,boatZ,simTime);
     R.maxH=Math.max(R.maxH,R.pos.y-hGround);
@@ -982,7 +1010,7 @@ function scoreTrick(t){
   updateSessionHUD();
 }
 function bail(reason){
-  R.state='bail'; R.bailT=0; SESSION.falls++; cam.trauma=Math.min(1,cam.trauma+0.6);
+  R.state='bail'; R.bailT=0; SESSION.falls++; cam.trauma=Math.min(1,cam.trauma+0.6); R.tension=0; R.overload=0;
   R.tumbleAxis.set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).normalize();
   R.vel.y=Math.max(R.vel.y,0.5); R.vel.x*=0.6;
   sprayBurst(R.pos,110,1.4); if(AC)playSplash(1.0);
@@ -1220,7 +1248,7 @@ function enableTouch(){ if(touch.active)return; touch.active=true; document.body
 }
 
 // ---------- HUD ----------
-const el={score:document.getElementById('score'),best:document.getElementById('best'),falls:document.getElementById('falls'),speed:document.getElementById('speed'),air:document.getElementById('airline'),trick:document.getElementById('trick'),fade:document.getElementById('fade')};
+const el={line:document.getElementById('line'),score:document.getElementById('score'),best:document.getElementById('best'),falls:document.getElementById('falls'),speed:document.getElementById('speed'),air:document.getElementById('airline'),trick:document.getElementById('trick'),fade:document.getElementById('fade')};
 function updateSessionHUD(){ el.score.textContent=SESSION.score.toLocaleString(); el.best.textContent=`Best trick: ${SESSION.bestName}${SESSION.best?' ('+SESSION.best.toLocaleString()+')':''}`; el.falls.textContent=`Falls: ${SESSION.falls}`; }
 let trickTimer=null;
 function showTrick(name,pts,sub,isBail){
@@ -1241,6 +1269,7 @@ let hudClock=0;
 function updateHUD(dt){
   hudClock+=dt; if(hudClock<0.08)return; hudClock=0;
   const sp=Math.hypot(R.vel.x,R.vel.z)*2.237; el.speed.textContent=Math.round(sp);
+  el.line.textContent=(R.tension/(RIDER_M*G)).toFixed(1)+'×';
   if(R.state==='air'){
     const fs=((R.spin>0)!==R.switchStanceAtTakeoff)?'FS':'BS';
     const bits=[`${R.airT.toFixed(1)} s`]; if(Math.abs(R.spin)>20)bits.push(`${fs} ${Math.round(Math.abs(R.spin))}°`); if(Math.abs(R.flip)>20)bits.push(R.flip>0?'front roll':'backroll'); if(Math.abs(R.roll)>20)bits.push(R.roll>0?'front flip':'tantrum');
