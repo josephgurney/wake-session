@@ -62,6 +62,7 @@ body{padding:0}
 .card kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
 .card button{margin-top:18px;font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent);color:var(--navy);border:0;border-radius:6px;padding:12px 26px;cursor:pointer;width:calc(100% - 5px);box-shadow:5px 5px 0 var(--pink)}
 .card button:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.card button:disabled{opacity:.6;cursor:progress;box-shadow:none}
 .card .note{font-size:12px;margin-top:10px;text-align:center}
 #fade{position:absolute;inset:0;background:#110e2a;opacity:0;pointer-events:none;transition:opacity .25s}
 /* the Lobster logo rides along at the top centre once the session starts */
@@ -243,7 +244,7 @@ body.touch .card .grid.tc{display:grid}
         <div><span><kbd>Cam</kbd> <kbd>Reset</kbd></span><span>tap to switch view or get back behind the boat</span></div>
         <div><span><kbd>DJ panel</kbd></span><span>top left: play, pause or skip Poorly P's tunes, and the sliders button for volume</span></div>
       </div>
-      <button id="go" type="button">Take the handle</button>
+      <button id="go" type="button" disabled>Take the handle</button>
       <div class="note label">Keyboard, gamepad or touch · sound and music start on first input</div>
     </div>
   </div>
@@ -261,10 +262,29 @@ body.touch .card .grid.tc{display:grid}
   </form>
 </dialog>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="assets/rider.js"></script>
-<script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/" } }
+</script>
+<script type="module">
+// three.js now ships only as ES modules. Load it, hand it to the game as the global THREE, then run the game script
+// below as an ordinary script, so its state and functions stay global (tools/jump_bench.py drives them from outside).
+try {
+  const T = await import('three');
+  let GLTFLoader = null;
+  try { ({ GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js')); } catch (e) { console.warn('GLTFLoader:', e); } // no loader: the primitive rider
+  window.THREE = Object.assign({ GLTFLoader }, T);
+  const game = document.createElement('script');
+  game.textContent = document.getElementById('game').textContent;
+  document.body.appendChild(game);
+  document.getElementById('go').disabled = false; // ready: the button was held until the game could start
+} catch (e) {
+  console.error(e);
+  document.getElementById('go').textContent = "Couldn't load the game. Check your connection and reload.";
+}
+</script>
+<script type="text/plain" id="game">
 'use strict';
 /* =====================================================================
    THURSDAY YACHT CLUB — a wakeboarding sim in a single file.
@@ -357,22 +377,23 @@ function surfaceNormal(x,z,boatZ,t,out){
 // ---------- renderer / scene ----------
 const canvas=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:false,powerPreference:'high-performance'});
-const IS_GL2=renderer.capabilities.isWebGL2;
+const IS_GL2=true; // three.js is WebGL 2 only now
 renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));
 renderer.setSize(innerWidth,innerHeight,false);
 // The scene is rendered as linear HDR into an offscreen target. Tone mapping, bloom, grading and the sRGB
 // conversion all happen in the post pass, so the renderer itself stays linear and untouched.
-renderer.outputEncoding=THREE.LinearEncoding;
+renderer.outputColorSpace=THREE.LinearSRGBColorSpace;
 renderer.toneMapping=THREE.NoToneMapping;
-renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap; renderer.shadowMap.autoUpdate=false;
+renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFShadowMap; renderer.shadowMap.autoUpdate=false;
 const scene=new THREE.Scene();
 const FOG_COLOR=new THREE.Color(0.34,0.44,0.58);
 const FOG_NEAR=240, FOG_FAR=2800;
 scene.fog=new THREE.Fog(FOG_COLOR,FOG_NEAR,FOG_FAR);
 const camera=new THREE.PerspectiveCamera(54,innerWidth/innerHeight,0.1,6000);
 const SUN=V3(0.42,0.50,0.75).normalize();
-scene.add(new THREE.HemisphereLight(new THREE.Color(0.50,0.64,0.84),new THREE.Color(0.06,0.11,0.12),0.3));
-const sun=new THREE.DirectionalLight(new THREE.Color(1.0,0.94,0.84),2.6); scene.add(sun); scene.add(sun.target);
+// light intensities are physical (three r155+): the old 'artist' units had a factor of pi built in
+scene.add(new THREE.HemisphereLight(new THREE.Color(0.50,0.64,0.84),new THREE.Color(0.06,0.11,0.12),0.15*Math.PI)); // a little fill; the sky map does most of it
+const sun=new THREE.DirectionalLight(new THREE.Color(1.0,0.94,0.84),2.6*Math.PI); scene.add(sun); scene.add(sun.target);
 sun.castShadow=true; sun.shadow.mapSize.set(2048,2048);
 {const c=sun.shadow.camera; c.left=-26; c.right=26; c.top=26; c.bottom=-26; c.near=1; c.far=160;}
 sun.shadow.bias=-0.0004; sun.shadow.normalBias=0.03; sun.shadow.radius=3;
@@ -384,8 +405,7 @@ const post={bloomOn:true};
   post.hdr=hdr;
   const type=hdr?THREE.HalfFloatType:THREE.UnsignedByteType;
   const opts={minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBAFormat,type,depthBuffer:true,stencilBuffer:false};
-  post.sceneRT=IS_GL2?new THREE.WebGLMultisampleRenderTarget(2,2,opts):new THREE.WebGLRenderTarget(2,2,opts);
-  if(post.sceneRT.isWebGLMultisampleRenderTarget)post.sceneRT.samples=4;
+  post.sceneRT=new THREE.WebGLRenderTarget(2,2,Object.assign({samples:4},opts));
   const small={minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBAFormat,type,depthBuffer:false,stencilBuffer:false};
   post.bright=new THREE.WebGLRenderTarget(2,2,small); post.blurA=new THREE.WebGLRenderTarget(2,2,small); post.blurB=new THREE.WebGLRenderTarget(2,2,small);
   post.cam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
@@ -418,7 +438,7 @@ const post={bloomOn:true};
         col=pow(max(col,0.0),vec3(1.0/2.2));
         gl_FragColor=vec4(col,1.0);
       }`});
-  post.black=new THREE.DataTexture(new Uint8Array([0,0,0,255]),1,1,THREE.RGBAFormat);
+  post.black=new THREE.DataTexture(new Uint8Array([0,0,0,255]),1,1,THREE.RGBAFormat); post.black.needsUpdate=true;
 }
 function renderPost(){
   renderer.setRenderTarget(post.sceneRT); renderer.render(scene,camera);
@@ -475,11 +495,20 @@ const skyMat=new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,fog:
     else { col=skyColor(d); float sd=max(dot(d,uSun),0.0); col+=vec3(1.0,0.98,0.93)*smoothstep(0.99930,0.99975,sd)*40.0; }
     gl_FragColor=vec4(col,1.0); }`});
 const sky=new THREE.Mesh(new THREE.SphereGeometry(4500,48,24),skyMat); sky.renderOrder=-10; scene.add(sky);
-// Image-based lighting from the same sky, so gelcoat, skin and the wet board pick up real reflections.
-{ const pm=new THREE.PMREMGenerator(renderer); const s=new THREE.Scene(); s.add(new THREE.Mesh(new THREE.SphereGeometry(40,32,16),skyMat)); scene.environment=pm.fromScene(s,0.04,1,200).texture; pm.dispose(); }
+// Image-based lighting from the same sky, so gelcoat, skin and the wet board pick up real reflections. Below the horizon
+// it's the lake (dark, reflecting the haze at a grazing angle) rather than more sky, so nothing is lit from underneath as
+// if it stood on a white floor; and there is no sun disc in it, since the sun light already draws its own highlight.
+{ const envMat=new THREE.ShaderMaterial({side:THREE.BackSide,depthWrite:false,uniforms:skyUniforms,vertexShader:skyMat.vertexShader,
+    fragmentShader:`varying vec3 vDir; ${NOISE_GLSL} ${SKY_GLSL}
+    void main(){ vec3 d=normalize(vDir); vec3 col;
+      if(d.y<0.0) col=mix(skyBase(vec3(d.x,0.0,d.z))*0.45,vec3(0.018,0.055,0.065),smoothstep(0.0,0.3,-d.y));
+      else col=skyColor(d);
+      gl_FragColor=vec4(col,1.0); }`});
+  const pm=new THREE.PMREMGenerator(renderer); const s=new THREE.Scene(); s.add(new THREE.Mesh(new THREE.SphereGeometry(40,32,16),envMat));
+  scene.environment=pm.fromScene(s,0.04,1,200).texture; pm.dispose(); envMat.dispose(); }
 
 // ---------- planar reflection: boat, rider, shore and sky mirrored into the water ----------
-const reflRT=new THREE.WebGLRenderTarget(2,2,{minFilter:THREE.LinearMipmapLinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBFormat,generateMipmaps:true});
+const reflRT=new THREE.WebGLRenderTarget(2,2,{minFilter:THREE.LinearMipmapLinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBAFormat,generateMipmaps:true});
 const reflCam=new THREE.PerspectiveCamera(); const reflTexMat=new THREE.Matrix4(); let reflOn=true, reflScale=0.5;
 const _rPlane=new THREE.Plane(), _rClip=new THREE.Vector4(), _rQ=new THREE.Vector4(), _rRot=new THREE.Matrix4(), _rLook=V3(), _rTarget=V3(), _rPt=V3(0,-0.15,0);
 function renderReflection(){
@@ -568,7 +597,7 @@ function waterMaterial(near){
         vec3 N=normalize(vec3(vN.x+(c0-cx)/e*amp, 1.0, vN.z+(c0-cz)/e*amp));
         float shadow=1.0;
         #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
-          shadow=getShadow(directionalShadowMap[0],directionalLightShadows[0].shadowMapSize,directionalLightShadows[0].shadowBias,directionalLightShadows[0].shadowRadius,vDirectionalShadowCoord[0]);
+          shadow=getShadow(directionalShadowMap[0],directionalLightShadows[0].shadowMapSize,directionalLightShadows[0].shadowIntensity,directionalLightShadows[0].shadowBias,directionalLightShadows[0].shadowRadius,vDirectionalShadowCoord[0]);
         #endif
         float ndv=max(dot(N,V),0.001);
         float fres=0.02+0.98*pow(max(1.0-ndv,0.0),5.0);
@@ -732,7 +761,7 @@ scene.add(hills);
 
 // ---------- materials & primitives ----------
 // Hex colours are authored in sRGB; the renderer works in linear, so convert once here.
-const mat=(color,o={})=>{const m=new THREE.MeshStandardMaterial(Object.assign({color,roughness:0.65,metalness:0},o)); m.color.convertSRGBToLinear(); return m;};
+const mat=(color,o={})=>new THREE.MeshStandardMaterial(Object.assign({color,roughness:0.65,metalness:0},o)); // hex colours are sRGB; three converts them
 const cylGeo=r=>new THREE.CylinderGeometry(r,r*0.82,1,12);
 function limbMesh(r,m){const me=new THREE.Mesh(cylGeo(r),m);me.castShadow=true;return me;}
 const _dir=V3();
@@ -748,7 +777,7 @@ function ik2(root,target,l1,l2,pole,out){
 function noiseTex(size,r,g,b,amp,seed){
   const c=document.createElement('canvas'); c.width=c.height=size; const x=c.getContext('2d'); const img=x.createImageData(size,size); const rnd=mulberry32(seed);
   for(let i=0;i<img.data.length;i+=4){ const n=(rnd()-0.5)*amp; img.data[i]=clamp(r+n,0,255); img.data[i+1]=clamp(g+n,0,255); img.data[i+2]=clamp(b+n,0,255); img.data[i+3]=255; }
-  x.putImageData(img,0,0); const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(6,6); t.encoding=THREE.sRGBEncoding; t.anisotropy=4; return t;
+  x.putImageData(img,0,0); const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(6,6); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=4; return t;
 }
 function boardTex(){
   const c=document.createElement('canvas'); c.width=256; c.height=768; const x=c.getContext('2d');
@@ -758,7 +787,7 @@ function boardTex(){
   x.restore(); x.globalAlpha=1;
   x.fillStyle='#e9f1f0'; x.beginPath(); x.arc(128,190,42,0,Math.PI*2); x.fill(); x.fillStyle='#15161a'; x.beginPath(); x.arc(128,190,30,0,Math.PI*2); x.fill();
   x.fillStyle='#00b298'; x.fillRect(96,520,64,8); x.fillRect(96,540,64,8);
-  const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; t.anisotropy=8; t.repeat.set(1/0.40,1/1.36); t.offset.set(0.5,0.5); return t;
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8; t.repeat.set(1/0.40,1/1.36); t.offset.set(0.5,0.5); return t;
 }
 function rocker(geo,amt,halfLen){ const p=geo.attributes.position; for(let i=0;i<p.count;i++){ const y=p.getY(i); p.setZ(i,p.getZ(i)+amt*Math.pow(y/halfLen,2)); } geo.computeVertexNormals(); return geo; }
 
@@ -778,7 +807,7 @@ function hullShape(scale,bowZ,sternZ,halfW){
 // the lettering sits a few millimetres proud of the gelcoat wherever the hull shape goes).
 function transomName(hull,text){
   const c=document.createElement('canvas'); c.width=1024; c.height=160; const x=c.getContext('2d');
-  const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; t.anisotropy=8;
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8;
   const draw=()=>{ x.clearRect(0,0,1024,160); x.textAlign='center'; x.textBaseline='middle';
     x.font='800 124px "Barlow Condensed","Arial Narrow",Impact,sans-serif'; x.fillStyle='#1f1b48'; x.fillText(text,512,68,980);
     x.fillStyle='#e6007e'; x.beginPath(); x.moveTo(150,140); x.quadraticCurveTo(512,110,874,140); x.quadraticCurveTo(512,126,150,140); x.fill();
@@ -854,8 +883,8 @@ const RM={
   vest:mat(0xe63946,{roughness:0.8,map:noiseTex(64,210,60,70,28,3)}),
   shorts:mat(0x1d2d44,{roughness:0.85,map:noiseTex(64,34,48,70,22,5)}),
   hair:mat(0x2b1d14,{roughness:0.9}),
-  boardTop:new THREE.MeshStandardMaterial({map:boardTex(),roughness:0.28,metalness:0}),
-  boardBase:mat(0xf1f1f1,{roughness:0.2}),
+  boardTop:new THREE.MeshPhysicalMaterial({map:boardTex(),roughness:0.32,metalness:0,clearcoat:0.7,clearcoatRoughness:0.12}),
+  boardBase:new THREE.MeshPhysicalMaterial({color:0xf1f1f1,roughness:0.25,metalness:0,clearcoat:0.8,clearcoatRoughness:0.06}),
   bind:mat(0x2a2a2e,{roughness:0.6}),
   accent:mat(0x00b298,{roughness:0.45})
 };
@@ -1007,7 +1036,7 @@ function placeParts(){
 // Every bone's bind rotation is identity, so a bone's rest frame is the model's own axes (+x left, +y up, +z forward) and
 // posing is a matter of turning each rest frame onto a target frame. Arms and legs are re-solved on the model's real bone
 // lengths, from its real shoulders and hips, so hands land on the handle and soles on the board.
-const RIG={ready:false,bones:{},rest:{},rd:{},wq:{},wp:{},curl:{},grip:1};
+const RIG={ready:false,bones:{},rest:{},rd:{},wq:{},wp:{},curl:{},grip:1,wetMats:[]};
 const RX=V3(1,0,0), RY=V3(0,1,0), RZ=V3(0,0,1);
 const _fa=V3(),_fb=V3(),_fc=V3(),_ga=V3(),_gb=V3(),_gc=V3(),_fm1=new THREE.Matrix4(),_fm2=new THREE.Matrix4(),_rq=new THREE.Quaternion(),_rq2=new THREE.Quaternion();
 const _r1=V3(),_r2=V3(),_r3=V3(),_r4=V3(),_r5=V3(),_r6=V3(),_r7=V3(),_r8=V3(),_r9=V3();
@@ -1030,7 +1059,7 @@ function setupRig(gltf){
   const model=gltf.scene, holder=new THREE.Group(), R=RIG;
   holder.rotation.y=-Math.PI/2; holder.add(model); // the model faces +z; the rider's chest faces -x, nose of the board on their left
   const info=(model.getObjectByName('Rider')||model).userData||{};
-  model.traverse(o=>{ if(o.isBone)R.bones[o.name]=o; if(o.isMesh){ o.castShadow=true; o.frustumCulled=false; } });
+  model.traverse(o=>{ if(o.isBone)R.bones[o.name]=o; if(o.isMesh){ o.castShadow=true; o.frustumCulled=false; riderMaterial(o); } });
   if(!R.bones.Root||!R.bones.hand_l) return;
   (function walk(b,at){ R.rest[b.name]=V3().copy(b.position).add(at); R.wq[b.name]=new THREE.Quaternion(); R.wp[b.name]=V3();
     for(const ch of b.children) if(ch.isBone) walk(ch,R.rest[b.name]); })(R.bones.Root,V3());
@@ -1061,6 +1090,27 @@ function setupRig(gltf){
   rider.add(holder); R.holder=holder; R.ready=true;
 }
 const toM=(v,out)=>out.copy(v).applyQuaternion(RIG.qInv); // rider space -> model space (the holder sits at the rider's origin)
+// The model's plain materials become physical ones: sheen on the fabric (and a little warm sheen on the skin, a cheap
+// stand-in for light scattering under it), a clearcoat on the helmet and the sunglasses. Water darkens and glosses skin and
+// fabric, and it dries off: dark is the colour multiplier when soaked.
+const RIDER_MAT={
+  skin:  {sheen:0.3,sheenRoughness:0.5,sheenColor:[0.85,0.42,0.32],clearcoat:0.04,clearcoatRoughness:0.35, wet:{roughness:0.26,clearcoat:0.5,dark:0.86}},
+  vest:  {sheen:0.6,sheenRoughness:0.7,sheenColor:[0.32,0.32,0.34], wet:{roughness:0.4,sheen:0.15,dark:0.62}},
+  shorts:{sheen:0.5,sheenRoughness:0.6,sheenColor:[0.3,0.3,0.32], wet:{roughness:0.42,sheen:0.12,dark:0.6}},
+  helmet:{clearcoat:1,clearcoatRoughness:0.1}, frame:{clearcoat:0.6,clearcoatRoughness:0.15}, lens:{clearcoat:1,clearcoatRoughness:0.02}, boots:{}
+};
+function riderMaterial(o){
+  const src=o.material, spec=RIDER_MAT[src.name]; if(!spec)return;
+  const m=new THREE.MeshPhysicalMaterial({name:src.name,vertexColors:src.vertexColors,side:src.side,roughness:src.roughness,metalness:src.metalness});
+  for(const k in spec){ if(k==='wet')continue; if(k==='sheenColor')m.sheenColor.setRGB(...spec[k]); else m[k]=spec[k]; }
+  if(spec.wet){ m.userData.dry={roughness:m.roughness,clearcoat:m.clearcoat,sheen:m.sheen}; m.userData.wet=spec.wet; RIG.wetMats.push(m); }
+  o.material=m; src.dispose();
+}
+function wetRider(){
+  for(const m of RIG.wetMats){ const d=m.userData.dry, w=m.userData.wet, k=R.wet;
+    m.roughness=lerp(d.roughness,w.roughness,k); if(w.clearcoat!=null)m.clearcoat=lerp(d.clearcoat,w.clearcoat,k);
+    if(w.sheen!=null)m.sheen=lerp(d.sheen,w.sheen,k); m.color.setScalar(lerp(1,w.dark,k)); }
+}
 function setWorld(name,q){ const b=RIG.bones[name]; RIG.wq[name].copy(q); b.quaternion.copy(_rq2.copy(RIG.wq[b.parent.name]).invert().multiply(q)); }
 function fk(name){ const b=RIG.bones[name]; return RIG.wp[name].copy(b.position).applyQuaternion(RIG.wq[b.parent.name]).add(RIG.wp[b.parent.name]); }
 const FINGER_CURL=[60,75,45], THUMB_CURL=[15,30,25]; // degrees each finger joint folds round the handle
@@ -1334,7 +1384,7 @@ const R={
   vySurf:0, airT:0, bailT:0, maxH:0, takeoffU:0, takeoffWake:false, takeoffYaw:0,
   grabs:{Indy:0,Melon:0,Nose:0,Tail:0}, grabHeld:{Indy:false,Melon:false,Nose:false,Tail:false}, grabVis:{Indy:0,Melon:0,Nose:0,Tail:0},
   nrm:V3(0,1,0), fw:V3(0,G,0), crouch:0.3, landComp:0, quat:new THREE.Quaternion(), baseQuat:new THREE.Quaternion(), renderQuat:new THREE.Quaternion(),
-  L:{spin:0,flip:0,roll:0}, charge:{spin:0,flip:0,roll:0}, chargeDir:{spin:0,flip:0,roll:0}, chargeT:{spin:0,flip:0,roll:0}, shape:0.45, rotPower:1, lastLanding:null,
+  wet:0, L:{spin:0,flip:0,roll:0}, charge:{spin:0,flip:0,roll:0}, chargeDir:{spin:0,flip:0,roll:0}, chargeT:{spin:0,flip:0,roll:0}, shape:0.45, rotPower:1, lastLanding:null,
 };
 const SESSION={score:0,best:0,bestName:'none yet',falls:0};
 const _rr=V3(), _fw=V3();
@@ -1491,7 +1541,7 @@ function land(h){
   const halfTurns=Math.round(R.spin/180);
   if(fail){ bail(fail,fall,_impact); return; }
   if(halfTurns%2!==0)R.switchStance=!R.switchStance;
-  R.state='riding'; R.steer=0; R.vySurf=0; R.landComp=clamp(vn/6,0.15,1);
+  R.state='riding'; R.steer=0; R.vySurf=0; R.landComp=clamp(vn/6,0.15,1); R.wet=Math.max(R.wet,clamp(vn/8,0.25,0.6));
   // a hard or sideways landing scrubs speed
   const scrub=(1-0.06*Math.max(0,vn-5))*(spinErr>22?0.8:1);
   R.vel.x*=scrub; R.vel.z=BOAT_SPEED+(R.vel.z-BOAT_SPEED)*scrub;
@@ -1533,7 +1583,7 @@ function scoreTrick(t){
 }
 function bail(reason,fall,vel){
   ragStart(fall,vel||R.vel,reason); // the ragdoll takes over from the pose, with the rider's speed and spin
-  R.state='bail'; R.bailT=0; SESSION.falls++; cam.trauma=Math.min(1,cam.trauma+0.6); R.tension=0; R.overload=0;
+  R.state='bail'; R.bailT=0; R.wet=1; SESSION.falls++; cam.trauma=Math.min(1,cam.trauma+0.6); R.tension=0; R.overload=0;
   sprayBurst(R.pos,40,1.0); if(AC)playSplash(1.0);
   showTrick(reason,'','No Risk, No Story. The boat\'s coming round.',true);
   updateSessionHUD();
@@ -1602,7 +1652,9 @@ function updateRiderVisual(dt){
   poseParams.bail=R.state==='bail'?R.bailT:0;
   poseParams.rag=R.state==='bail'&&RAG.on;
   if(poseParams.rag)ragToPose(); else solvePose(poseParams);
-  if(RIG.ready)driveRig(dt);
+  // wet: drying off toward the damp the spray keeps a rider at
+  if(R.state!=='bail')R.wet=moveToward(R.wet,R.state==='riding'?0.15:0,dt/14);
+  if(RIG.ready){ driveRig(dt); wetRider(); }
   // handle and rope follow the hands
   rider.localToWorld(handleW.copy(J.handle)); handleAxisW.copy(J.handleAxis).applyQuaternion(rider.quaternion).normalize();
   handle.position.copy(handleW); handle.quaternion.setFromUnitVectors(V3(1,0,0),handleAxisW);
