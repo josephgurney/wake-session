@@ -13,6 +13,9 @@ Each run cuts out a set distance beyond the wake, settles, then edges hard back 
   hold     Space held through the lip: stands tall and keeps the ramp's lift
   pop      Space released partway up the ramp: legs extend through the lip
 
+Then a trick table: the same popped jump with a scripted rotation input, wound up off the lip for a set time and then
+relaxed, tucked (kept pushing) or opened (pushed back), to check what each input lands as.
+
 The physics constants live at the top of the script in index.html (EDGE_LD, ROPE_K, ABSORB, ...); edit, re-run, compare.
 """
 import argparse
@@ -32,6 +35,16 @@ RUNS = [
     {"cut": 6, "mode": "pop"},
 ]
 
+# Popped 6 m jumps with a rotation input: wound up for `charge` seconds off the lip, then 'relax' (let go), 'tuck' (keep
+# pushing) or 'open' (push back). `expect` is (rotation it should land as, whether it should ride away).
+TRICKS = [
+    {"name": "tap for a 180", "axis": "spin", "charge": 0.12, "after": "relax", "expect": (180, True)},
+    {"name": "wind up, open: 360", "axis": "spin", "charge": 0.3, "after": "open", "expect": (360, True)},
+    {"name": "wind up, tuck: 540", "axis": "spin", "charge": 0.3, "after": "tuck", "expect": (540, True)},
+    {"name": "backroll, hold", "axis": "flip", "charge": 0.3, "after": "tuck", "expect": (-360, True)},
+    {"name": "backroll, let go", "axis": "flip", "charge": 0.3, "after": "relax", "expect": (0, False)},
+]
+
 # (label, metric key, low, high, which runs it applies to). Ranges come from the research behind the plan:
 # airtime and height are derived from wake-ramp physics and rider reports; speed and line load from water-ski studies.
 TARGETS = [
@@ -47,7 +60,9 @@ RUN_JS = """
 (cfg) => {
   physics = function(){}; gatherInput = function(){};
   boatZ = 0; simTime = 0; resetRider();   // same water, same chop, every run
-  const dt = 1/120, traj = [];
+  const dt = 1/120, traj = [], bail0 = bail;
+  let failReason = null, rot = 0;
+  bail = (reason, fall) => { failReason = reason; bail0(reason, fall); };
   let t = 0, phase = 'settle', cruiseT = 0, maxT = 0, maxSpeed = 0, takeoff = null, landed = null, result = 'no jump';
   while (t < 30) {
     const d = boatZ - STERN_OFF - R.pos.z, xc = crestX(d);
@@ -59,23 +74,32 @@ RUN_JS = """
       if (cfg.mode !== 'relaxed' && R.state === 'riding') R.loading = true;
       if (R.state === 'riding' && R.vySurf > 1.5 && R.pos.x < 0) { if (cfg.mode === 'pop') { R.popRequest = true; R.loading = false; } phase = 'go'; }
       if (R.state === 'air') phase = 'go';
-    } else R.steerIn = 0;
+    } else {
+      R.steerIn = 0; R.flipIn = 0;
+      const tr = cfg.trick;
+      if (tr && R.state === 'air') {
+        const inp = R.airT < tr.charge ? 1 : tr.after === 'tuck' ? 1 : tr.after === 'open' ? -1 : 0;
+        if (tr.axis === 'spin') R.steerIn = inp; else R.flipIn = -inp;   // down arrow: backroll
+      }
+    }
     const was = R.state;
     boatZ += BOAT_SPEED*dt; simTime += dt; stepRider(dt);
     if (phase === 'edge' || phase === 'go') {
       maxT = Math.max(maxT, R.tension/(RIDER_M*G));
       maxSpeed = Math.max(maxSpeed, Math.hypot(R.vel.x, R.vel.z));
       if (was === 'riding' && R.state === 'air') takeoff = {x: R.pos.x, y: R.pos.y, vy: R.vel.y, lip: wakeH(-crestX(d), d)};
-      if (R.state === 'air') traj.push([R.pos.x, R.pos.y, R.airT]);
+      if (R.state === 'air') { traj.push([R.pos.x, R.pos.y, R.airT]); rot = cfg.trick && cfg.trick.axis === 'flip' ? R.flip : R.spin; }
       if (takeoff && R.state !== 'air') { landed = R.pos.x; result = R.state === 'bail' ? 'bail' : 'landed'; break; }
     }
     t += dt;
   }
+  bail = bail0;
   const d = boatZ - STERN_OFF - R.pos.z;
   const wake = [];
   for (let u = -7; u <= 7.001; u += 0.05) wake.push([u, wakeH(u, d)]);
   const peak = traj.reduce((m, p) => Math.max(m, p[1]), -9);
-  return {cfg, result, traj, wake, takeoff, landed, farCrest: crestX(d), cruiseT, maxT,
+  return {cfg, result, traj, wake, takeoff, landed, farCrest: crestX(d), cruiseT, maxT, rot, failReason,
+          landingSpeed: R.lastLanding ? R.lastLanding.vn : null,
           speedRatio: maxSpeed/BOAT_SPEED, airT: traj.length ? traj[traj.length-1][2] : 0,
           aboveLip: takeoff ? peak - takeoff.lip : 0};
 }
@@ -113,11 +137,12 @@ def run_bench(three_path=None):
         page.click("#go")
         for cfg in RUNS:
             results.append(page.evaluate(RUN_JS, cfg))
+        tricks = [page.evaluate(RUN_JS, {"cut": 6, "mode": "pop", "trick": tr}) for tr in TRICKS]
         browser.close()
     server.shutdown()
     if errors:
         raise SystemExit("page errors:\n" + "\n".join(errors))
-    return results
+    return results, tricks
 
 
 def report(results):
@@ -138,6 +163,23 @@ def report(results):
     ok = all(r["landed"] is not None and r["landed"] > r["farCrest"] for r in cleared)
     ok_all &= ok
     print(f"{'PASS' if ok else 'MISS'}  {'Popped jumps clear the second wake':<38}")
+    return ok_all
+
+
+def report_tricks(tricks):
+    print(f"\n{'trick (popped 6 m)':<22}{'turned':>8}{'lands as':>10}{'landing m/s':>13}  result")
+    ok_all = True
+    for r in tricks:
+        tr = r["cfg"]["trick"]
+        per = 180 if tr["axis"] == "spin" else 360
+        lands_as = round(r["rot"] / per) * per
+        rode = r["result"] == "landed"
+        want_rot, want_ride = tr["expect"]
+        ok = rode == want_ride and (lands_as == want_rot or not want_ride)
+        ok_all &= ok
+        speed = f"{r['landingSpeed']:.1f}" if r["landingSpeed"] is not None else "-"
+        outcome = "rode away" if rode else (r["failReason"] or r["result"])
+        print(f"{tr['name']:<22}{r['rot']:>7.0f}°{lands_as:>9}°{speed:>13}  {'PASS' if ok else 'MISS'}  {outcome}")
     return ok_all
 
 
@@ -186,7 +228,8 @@ if __name__ == "__main__":
     ap.add_argument("--three", help="local three.min.js (r128) to use instead of the CDN")
     ap.add_argument("--out", default=str(ROOT / "tools" / "out" / "jump_bench.png"))
     args = ap.parse_args()
-    res = run_bench(args.three)
+    res, tricks = run_bench(args.three)
     passed = report(res)
+    passed &= report_tricks(tricks)
     plot(res, pathlib.Path(args.out))
     raise SystemExit(0 if passed else 1)

@@ -49,6 +49,7 @@ body{padding:0}
 .card p{margin:12px 0 0;color:var(--ink-dim);line-height:1.55;max-width:60ch}
 .card .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;margin-top:18px;font-size:13px}
 .card .grid div{display:flex;justify-content:space-between;gap:10px;align-items:center;min-width:0}
+.card .grid span:first-child{white-space:nowrap}
 .card .grid span:last-child{color:var(--ink-dim);text-align:right}
 .card kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
 .card button{margin-top:22px;font-family:var(--display);font-weight:800;font-size:22px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent);color:#1a1200;border:0;border-radius:6px;padding:12px 26px;cursor:pointer;width:100%}
@@ -115,7 +116,7 @@ body.touch .card .grid.tc{display:grid}
   </div>
   <div id="trick"><div class="name"></div><div class="pts"></div><div class="sub"></div></div>
   <div id="controls">
-    <span><kbd>←</kbd><kbd>→</kbd> edge · spin in air</span>
+    <span><kbd>←</kbd><kbd>→</kbd> edge · spin off the lip</span>
     <span><kbd>Space</kbd> hold to load, release to pop</span>
     <span><kbd>↑</kbd><kbd>↓</kbd> front roll · backroll</span>
     <span><kbd>Q</kbd><kbd>E</kbd> tantrum · front flip</span>
@@ -129,11 +130,12 @@ body.touch .card .grid.tc{display:grid}
   <div id="start">
     <div class="card">
       <h1>Wake <em>Session</em></h1>
-      <p>Boat is set at 21 mph on a 65 ft line. Cut out wide, then edge hard back into the wake. Hold <kbd>Space</kbd> on the way in to load the line and let go at the lip to pop. Clear both wakes for the wake-to-wake bonus. Over- or under-rotate and you swim.</p>
+      <p>Boat is set at 21 mph on a 65 ft line. Cut out wide, then edge hard back into the wake. Hold <kbd>Space</kbd> on the way in to load the line and let go at the lip to pop. Clear both wakes for the wake-to-wake bonus. Rotation is set at the lip: tap a direction for a 180, hold it longer to wind up more, then keep pushing to tuck and turn faster or push back to open up and slow down. Over- or under-rotate and you catch an edge.</p>
       <div class="grid kb">
-        <div><span><kbd>←</kbd> <kbd>→</kbd></span><span>heelside / toeside edge · spins in the air</span></div>
+        <div><span><kbd>←</kbd> <kbd>→</kbd></span><span>heelside / toeside edge · spin off the lip (tap for 180, hold to wind up more)</span></div>
+        <div><span>keep pushing /<br>push back</span><span>tuck to turn faster / open up to slow it</span></div>
         <div><span><kbd>Space</kbd></span><span>hold to load, release to pop</span></div>
-        <div><span><kbd>↑</kbd> <kbd>↓</kbd></span><span>front roll / backroll</span></div>
+        <div><span><kbd>↑</kbd> <kbd>↓</kbd></span><span>front roll / backroll (hold through it)</span></div>
         <div><span><kbd>Q</kbd> <kbd>E</kbd></span><span>tantrum / front flip</span></div>
         <div><span><kbd>A</kbd> <kbd>D</kbd></span><span>melon / indy grab</span></div>
         <div><span><kbd>W</kbd> <kbd>S</kbd></span><span>nose / tail grab</span></div>
@@ -141,7 +143,7 @@ body.touch .card .grid.tc{display:grid}
         <div><span>Gamepad</span><span>left stick edge · right stick pull down then flick · bumpers grab</span></div>
       </div>
       <div class="grid tc">
-        <div><span><kbd>Left side</kbd></span><span>drag left / right to edge, and to spin in the air</span></div>
+        <div><span><kbd>Left side</kbd></span><span>drag left / right to edge, and off the lip to spin</span></div>
         <div><span><kbd>Left side</kbd></span><span>drag up / down in the air for front roll / backroll</span></div>
         <div><span><kbd>Pop</kbd></span><span>hold to load the line, let go at the lip</span></div>
         <div><span><kbd>Grabs</kbd></span><span>hold any grab button while airborne</span></div>
@@ -192,12 +194,17 @@ const PYLON_H=2.35, PYLON_Z=-0.4, STERN_OFF=3.3;
 const EDGE_MAX=30*DEG;       // max board yaw relative to travel
 const EDGE_ROLL=40*DEG;      // visual edge angle at full input
 const GRIP=8.5, A_MAX=8.5, DRAG=0.03, EDGE_LD=3.0; // the edge's side force comes with drag, like a keel: lift/drag ratio
-const SPIN_ACC=1500, SPIN_MAX=700, SPIN_DECAY=8;
+// Rotation in the air. Angular momentum is set at the lip and then conserved: rotation inputs in the takeoff window turn
+// the body (charge L, harder off a bigger pop); after that the same inputs only change body shape. Holding the rotation
+// tucks (spins about 1.7x faster, inverts nearly 3x), letting go relaxes, pushing the other way opens up to slow it for
+// the landing. Rate = L / I(shape). I is in kg m^2 (diver and rider estimates); L in those units times degrees/s.
+const ROT={spin:{open:3.8,tight:2.0,Lmax:1100,period:180},flip:{open:13,tight:4.5,Lmax:1750,period:360},roll:{open:13,tight:4.5,Lmax:1750,period:360}};
+const TAKEOFF_WINDOW=0.45, CHARGE_TIME=0.25; // when a rotation can still be started after leaving the lip; how long a full one takes to wind in
+const ASSIST_MAX=25;          // degrees: the most the rider can reorient in the last moment before landing
 const RIDER_M=80;            // rider plus board, kg
 const ROPE_K=2000, ROPE_C=240; // poly-E line: stretches 2-3% under a hard cut; damped by the arms and body
 const HANDLE_MAX=2.8;        // line pull, in body weights, that rips the handle out of the rider's hands
 const ABSORB=2.4;            // vertical speed (m/s) relaxed legs soak up going over a wake, like skiing moguls
-const FLIP_ACC=1000, FLIP_MAX=520, FLIP_DECAY=5.5;
 
 // ---------- water surface (shared CPU/GPU) ----------
 const WAKE_GLSL = `
@@ -1007,7 +1014,8 @@ const R={
   vySurf:0, airT:0, bailT:0, maxH:0, takeoffU:0, takeoffWake:false, takeoffYaw:0,
   grabs:{Indy:0,Melon:0,Nose:0,Tail:0}, grabHeld:{Indy:false,Melon:false,Nose:false,Tail:false}, grabVis:{Indy:0,Melon:0,Nose:0,Tail:0},
   nrm:V3(0,1,0), fw:V3(0,G,0), crouch:0.3, landComp:0, quat:new THREE.Quaternion(), baseQuat:new THREE.Quaternion(), renderQuat:new THREE.Quaternion(),
-  tumble:new THREE.Quaternion(), tumbleAxis:V3(0,1,0),
+  tumble:new THREE.Quaternion(), tumbleAxis:V3(0,1,0), tumbleLeft:0,
+  L:{spin:0,flip:0,roll:0}, charge:{spin:0,flip:0,roll:0}, chargeDir:{spin:0,flip:0,roll:0}, chargeT:{spin:0,flip:0,roll:0}, shape:0.45, rotPower:1, lastLanding:null,
 };
 const SESSION={score:0,best:0,bestName:'none yet',falls:0};
 const _rr=V3(), _fw=V3();
@@ -1033,8 +1041,10 @@ function resetRider(){
 function takeoff(vy,popped){
   R.state='air'; R.airT=0; R.vel.y=vy; R.spin=R.flip=R.roll=0; R.spinVel=R.flipVel=R.rollVel=0; R.maxH=0;
   R.takeoffU=R.pos.x; R.takeoffWake=Math.abs(wakeH(R.pos.x,boatZ-STERN_OFF-R.pos.z))>0.12;
-  R.takeoffYaw=R.boardYaw+(R.switchStance?Math.PI:0);
+  R.takeoffYaw=R.travelYaw+(R.switchStance?Math.PI:0);
   R.baseQuat.copy(R.renderQuat); R.loading=false; R.load=0; R.popped=!!popped; R.spinArmed=R.steerIn===0;
+  for(const k in R.L){ R.L[k]=0; R.charge[k]=0; R.chargeT[k]=0; } R.shape=0.3;
+  R.rotPower=clamp(0.55+0.1*vy,0.6,1.15); // a bigger pop leaves more to turn with
   for(const k in R.grabs)R.grabs[k]=0;
   if(AC){sprayBurst(R.pos,18,0.6);}
 }
@@ -1043,7 +1053,7 @@ function stepRider(dt){
   if(R.state==='bail'){
     R.bailT+=dt; R.vel.x*=Math.exp(-2.5*dt); R.vel.z=lerp(R.vel.z,0,1-Math.exp(-2.5*dt)); R.vel.y-=G*dt;
     R.pos.x+=R.vel.x*dt; R.pos.z+=R.vel.z*dt; R.pos.y+=R.vel.y*dt;
-    const h=waterAt(R.pos.x,R.pos.z,boatZ,simTime)-0.45; if(R.pos.y<h){R.pos.y=h;R.vel.y*=-0.15;}
+    const h=waterAt(R.pos.x,R.pos.z,boatZ,simTime)-0.18; if(R.pos.y<h){R.pos.y=h;R.vel.y*=-0.15;} // the vest floats the rider at the surface
     if(R.bailT>2.4 && !fade.active){fadeOut(()=>resetRider());}
     return;
   }
@@ -1089,46 +1099,71 @@ function stepRider(dt){
     const sp=Math.hypot(R.vel.x,R.vel.z); if(sp>0.5)R.travelYaw=Math.atan2(R.vel.x,R.vel.z);
     const hGround=waterAt(R.pos.x,R.pos.z,boatZ,simTime);
     R.maxH=Math.max(R.maxH,R.pos.y-hGround);
-    // predicted time to splashdown drives a gentle landing assist on rotation
+    // predicted time to splashdown: in the last moment the rider can square up a little, no more
     const vy=R.vel.y,dy=Math.max(0,R.pos.y-hGround); const tLand=(vy+Math.sqrt(vy*vy+2*G*dy))/G;
-    const assistOn=tLand<0.35;
-    const rot=(ang,vel,input,acc,max,decay,period)=>{
-      if(input!==0){vel+=input*acc*dt; vel=clamp(vel,-max,max);}
-      else { vel*=Math.exp(-decay*dt);
-        if(assistOn){ const target=Math.round(ang/period)*period; const err=target-ang; if(Math.abs(err)<45){ vel=damp(vel,err*8,10,dt); } } }
-      return [ang+vel*dt,vel]; };
-    if(R.steerIn===0)R.spinArmed=true;
-    [R.spin,R.spinVel]=rot(R.spin,R.spinVel,R.spinArmed?R.steerIn:0,SPIN_ACC,SPIN_MAX,SPIN_DECAY,180);
-    [R.flip,R.flipVel]=rot(R.flip,R.flipVel,R.flipIn,FLIP_ACC,FLIP_MAX,FLIP_DECAY,360);
-    [R.roll,R.rollVel]=rot(R.roll,R.rollVel,R.rollIn,FLIP_ACC,FLIP_MAX,FLIP_DECAY,360);
+    if(R.steerIn===0)R.spinArmed=true; // edging into the wake doesn't count as a spin: go through neutral first
+    let tuck=false, open=false, charging=false;
+    for(const [k,inp] of [['spin',R.spinArmed?R.steerIn:0],['flip',R.flipIn],['roll',R.rollIn]]){
+      const c=ROT[k], Lmax=c.Lmax*R.rotPower;
+      // winding a rotation in at the lip: starts in the takeoff window, lasts as long as it's held, up to CHARGE_TIME
+      if(inp!==0 && R.charge[k]===0 && R.airT<TAKEOFF_WINDOW){ R.charge[k]=1; R.chargeDir[k]=Math.sign(inp); R.chargeT[k]=0; }
+      if(R.charge[k]===1 && Math.sign(inp)===R.chargeDir[k] && R.chargeT[k]<CHARGE_TIME){
+        charging=true; R.chargeT[k]+=dt; R.L[k]=clamp(R.L[k]+inp*Lmax/CHARGE_TIME*dt,-Lmax,Lmax);
+      } else {
+        if(R.charge[k]===1)R.charge[k]=2; // let go: the rotation is set
+        if(inp!==0 && R.L[k]!==0){ if(Math.sign(inp)===Math.sign(R.L[k]))tuck=true; else open=true; }
+      }
+    }
+    const grabbing=Object.values(R.grabHeld).some(v=>v);
+    R.shape=damp(R.shape, charging?0.5 : tuck?1 : grabbing?0.8 : open?0 : 0.3, 7, dt);
+    for(const k of ['spin','flip','roll']){
+      const c=ROT[k], vel=R.L[k]/lerp(c.open,c.tight,R.shape); let ang=R[k]+vel*dt;
+      if(tLand<0.3){ const err=Math.round(ang/c.period)*c.period-ang; if(Math.abs(err)<ASSIST_MAX)ang+=err*(1-Math.exp(-5*dt)); }
+      R[k]=ang; R[k+'Vel']=vel;
+    }
     for(const k in R.grabs){ if(R.grabHeld[k])R.grabs[k]+=dt; else if(R.grabs[k]>0 && R.grabs[k]<0.18)R.grabs[k]=0; }
     if(R.airT>0.08 && R.pos.y<=hGround && R.vel.y<0) land(hGround);
   }
 }
 const SPIN_PTS={180:150,360:450,540:900,720:1600,900:2600,1080:4000,1260:6000};
+const _ln=V3(), _toe=V3();
 function land(h){
-  const impact=-R.vel.y; R.pos.y=h; R.vel.y=0;
-  cam.trauma=Math.min(1,cam.trauma+clamp((impact-2.5)/6,0,1)*0.8);
+  // speed into the water surface, measured against the wake (it travels with the boat): a downslope landing is soft
+  surfaceNormal(R.pos.x,R.pos.z,boatZ,simTime,_ln);
+  const vn=Math.max(0,-(R.vel.x*_ln.x+R.vel.y*_ln.y+(R.vel.z-BOAT_SPEED)*_ln.z));
+  R.pos.y=h; R.vel.y=0;
+  cam.trauma=Math.min(1,cam.trauma+clamp((vn-2)/5,0,1)*0.8);
+  // board angle: off the flight path (spin) and off flat (flips, rolls), from the nearest whole rotation
   const spinN=Math.round(R.spin/180)*180, spinErr=Math.abs(R.spin-spinN);
   const flipN=Math.round(R.flip/360)*360, flipErr=Math.abs(R.flip-flipN);
   const rollN=Math.round(R.roll/360)*360, rollErr=Math.abs(R.roll-rollN);
   const d=boatZ-STERN_OFF-R.pos.z, u=R.pos.x, xc=crestX(d);
   const inside=Math.abs(u)<xc-0.4;
-  let fail=null;
-  if(spinErr>50) fail = Math.abs(R.spin)<Math.abs(spinN)?'Under-rotated':'Over-rotated';
-  else if(flipErr>60) fail='Went over the front';
-  else if(rollErr>60) fail='Caught an edge';
-  else if(impact>11.5) fail='Too much heat into the flats';
-  else if(impact>9.2 && inside) fail='Cased the second wake';
+  R.lastLanding={vn,spinErr,flipErr,rollErr,inside};
+  // which edge leads: the board slides toward its toe side or its heel side
+  _toe.set(FACING,0,0).applyQuaternion(R.quat); _toe.y=0; _toe.normalize();
+  const toeLeads=R.vel.x*_toe.x+R.vel.z*_toe.z>0;
+  let fail=null, fall=null;
+  const short=(a,n)=>Math.abs(a)<Math.abs(n)?'Under':'Over';
+  if(flipErr>60){ fail=`${short(R.flip,flipN)}-rotated the ${R.flip<0?'backroll':'front roll'}`; fall=V3(R.vel.x,0,R.vel.z).normalize(); }
+  else if(rollErr>60){ fail=`${short(R.roll,rollN)}-rotated the ${R.roll<0?'tantrum':'front flip'}`; fall=V3().copy(_toe).multiplyScalar(toeLeads?1:-1); }
+  else if(spinErr>45){
+    fail=`${short(R.spin,spinN)}-rotated: caught your ${toeLeads?'toe':'heel'} edge`;
+    fall=V3().copy(_toe).multiplyScalar(toeLeads?1:-1); // a toe edge throws you on your face, a heel edge onto your back
+  }
+  else if(vn>7.5){ fail=inside?'Cased the second wake':'Too much heat into the flats'; fall=V3(R.vel.x,0,R.vel.z).normalize(); }
   const halfTurns=Math.round(R.spin/180);
-  if(fail){ bail(fail); return; }
+  if(fail){ bail(fail,fall); return; }
   if(halfTurns%2!==0)R.switchStance=!R.switchStance;
-  R.state='riding'; R.steer=0; R.vySurf=0; R.landComp=clamp(impact/9,0.15,1);
+  R.state='riding'; R.steer=0; R.vySurf=0; R.landComp=clamp(vn/6,0.15,1);
+  // a hard or sideways landing scrubs speed
+  const scrub=(1-0.06*Math.max(0,vn-5))*(spinErr>22?0.8:1);
+  R.vel.x*=scrub; R.vel.z=BOAT_SPEED+(R.vel.z-BOAT_SPEED)*scrub;
   R.boardYaw=R.travelYaw;
-  if(AC)playSplash(clamp(impact/10,0.25,1)*0.9);
-  sprayBurst(R.pos,30+impact*4,0.9);
+  if(AC)playSplash(clamp(vn/6,0.25,1)*0.9);
+  sprayBurst(R.pos,30+vn*6,0.9);
   if(R.airT<0.28 && spinN===0 && flipN===0 && rollN===0)return; // small bump, no callout
-  scoreTrick({spin:spinN,flip:flipN,roll:rollN,spinErr,flipErr,rollErr,impact,inside,halfTurns});
+  scoreTrick({spin:spinN,flip:flipN,roll:rollN,spinErr,flipErr,rollErr,vn,inside,halfTurns});
 }
 function scoreTrick(t){
   const parts=[]; let pts=50; const w2w=R.takeoffWake && !t.inside && Math.sign(R.pos.x)===-Math.sign(R.takeoffU||1) && Math.abs(R.pos.x)>1.5;
@@ -1151,6 +1186,7 @@ function scoreTrick(t){
   if(w2w){mult*=1.5;sub.push('wake to wake ×1.5');}
   const err=Math.max(t.spinErr,t.flipErr,t.rollErr);
   if(err<14){mult*=1.25;sub.push('clean landing ×1.25');} else if(err>32){mult*=0.7;sub.push('sketchy landing ×0.7');}
+  if(t.vn>5){mult*=0.85;sub.push('heavy landing ×0.85');}
   if(R.popped && R.takeoffWake){mult*=1.1;sub.push('popped the lip');}
   sub.push(`${R.airT.toFixed(2)} s air · ${R.maxH.toFixed(1)} m`);
   pts=Math.round(pts*mult/10)*10;
@@ -1159,9 +1195,11 @@ function scoreTrick(t){
   showTrick(name,`+${pts.toLocaleString()}`,sub.join(' · '),false);
   updateSessionHUD();
 }
-function bail(reason){
+function bail(reason,fall){
   R.state='bail'; R.bailT=0; SESSION.falls++; cam.trauma=Math.min(1,cam.trauma+0.6); R.tension=0; R.overload=0;
-  R.tumbleAxis.set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).normalize();
+  // pitch over in the direction the crash throws the rider (a turn about the axis across that direction), then float
+  if(fall && fall.lengthSq()>0.01){ R.tumbleAxis.crossVectors(UP,fall).normalize(); R.tumbleLeft=1.9; }
+  else { R.tumbleAxis.set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).normalize(); R.tumbleLeft=2.4; }
   R.vel.y=Math.max(R.vel.y,0.5); R.vel.x*=0.6;
   sprayBurst(R.pos,110,1.4); if(AC)playSplash(1.0);
   showTrick(reason,'','Hold on, the boat is coming round',true);
@@ -1186,15 +1224,17 @@ function updateRiderVisual(dt){
     R.renderQuat.slerp(R.quat,1-Math.exp(-14*dt));
     R.baseQuat.copy(R.renderQuat);
   } else if(R.state==='air'){
-    _yawQ.setFromAxisAngle(UP,R.takeoffYaw); R.baseQuat.slerp(_yawQ,1-Math.exp(-2.5*dt));
+    _yawQ.setFromAxisAngle(UP,R.travelYaw+stance); R.baseQuat.slerp(_yawQ,1-Math.exp(-2.5*dt)); // spin is counted from the flight path
     _tmpQ.setFromAxisAngle(UP,R.spin*DEG); R.quat.copy(_tmpQ).multiply(R.baseQuat);
     _tmpQ.setFromAxisAngle(V3(1,0,0),R.flip*DEG); R.quat.multiply(_tmpQ);
     _tmpQ.setFromAxisAngle(V3(0,0,1),R.roll*DEG); R.quat.multiply(_tmpQ);
     R.renderQuat.copy(R.quat);
   } else {
-    _tmpQ.setFromAxisAngle(R.tumbleAxis,dt*4.5); R.renderQuat.premultiply(_tmpQ);
+    const da=Math.min(R.tumbleLeft,dt*6); R.tumbleLeft-=da; _tmpQ.setFromAxisAngle(R.tumbleAxis,da); R.renderQuat.premultiply(_tmpQ);
   }
   rider.quaternion.copy(R.renderQuat);
+  // the vest floats the chest at the surface: as the body goes over, the feet (the rider's origin) rise with the board
+  if(R.state==='bail'){ _v.set(0,1,0).applyQuaternion(R.renderQuat); rider.position.y=Math.max(R.pos.y,waterAt(R.pos.x,R.pos.z,boatZ,simTime)-0.15-1.1*_v.y); }
   rider.updateMatrixWorld(true); _invQ.copy(rider.quaternion).invert();
   const pyl=pylonPos();
   // body line: on the water it follows the force the water puts on the board (see stepRider), which is what makes
@@ -1220,7 +1260,7 @@ function updateRiderVisual(dt){
   let crouchT;
   // legs soak up the wake: they fold as the face shoves the board up, and extend as the surface drops away
   if(R.state==='riding')crouchT=0.42+0.4*R.load+0.55*R.landComp+0.12*Math.abs(R.steer)+clamp((R.fw.y/G-1)*0.25,-0.12,0.3);
-  else if(R.state==='air')crouchT=anyGrab?1.5:0.8; // knees come up in the air; a grab is a full tuck, board pulled to the hand
+  else if(R.state==='air')crouchT=anyGrab?1.5:0.55+0.75*R.shape; // knees come up as the rider tucks; a grab is a full tuck, board pulled to the hand
   else crouchT=0.6;
   poseParams.crouch=damp(poseParams.crouch,clamp(crouchT,0,1.6),R.state==='riding'?9:6,dt);
   poseParams.twist=damp(poseParams.twist,R.state==='air'?0.8:0.85,5,dt); // how far the chest turns from sideways to face the handle
