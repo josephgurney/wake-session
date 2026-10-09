@@ -16,6 +16,9 @@ Each run cuts out a set distance beyond the wake, settles, then edges hard back 
 Then a trick table: the same popped jump with a scripted rotation input, wound up off the lip for a set time and then
 relaxed, tucked (kept pushing) or opened (pushed back), to check what each input lands as.
 
+Then a crash table: scripted crashes followed through the ragdoll for 2.3 s, checking which way the rider goes over,
+how far they slide, how deep the head goes and that they end up floating.
+
 The physics constants live at the top of the script in index.html (EDGE_LD, ROPE_K, ABSORB, ...); edit, re-run, compare.
 """
 import argparse
@@ -45,6 +48,16 @@ TRICKS = [
     {"name": "backroll, let go", "axis": "flip", "charge": 0.3, "after": "relax", "expect": (0, False)},
 ]
 
+# Crashes off a popped 3 m jump, followed through the ragdoll. `fall` is which way the chest should face 0.3 s in:
+# 'up' (thrown on their back), 'down' (thrown on their face) or None.
+CRASHES = [
+    {"name": "heel edge catch", "trick": {"axis": "spin", "charge": 0.24, "after": "open", "dir": 1}, "reason": "heel edge", "fall": "up"},
+    {"name": "toe edge catch", "trick": {"axis": "spin", "charge": 0.24, "after": "open", "dir": -1}, "reason": "toe edge", "fall": "down"},
+    {"name": "short backroll", "trick": {"axis": "flip", "charge": 0.3, "after": "relax"}, "reason": "Under-rotated the backroll", "fall": None},
+]
+CRASH_TARGETS = [("slide", "slide m", 1.5, 6.0), ("stopT", "stops in s", 0.3, 1.2), ("deepHead", "head deepest m", 0.0, 0.6),
+                 ("headEnd", "head at 2.3 s m", -0.05, 0.6)]
+
 # (label, metric key, low, high, which runs it applies to). Ranges come from the research behind the plan:
 # airtime and height are derived from wake-ramp physics and rider reports; speed and line load from water-ski studies.
 TARGETS = [
@@ -61,8 +74,8 @@ RUN_JS = """
   physics = function(){}; gatherInput = function(){};
   boatZ = 0; simTime = 0; resetRider();   // same water, same chop, every run
   const dt = 1/120, traj = [], bail0 = bail;
-  let failReason = null, rot = 0;
-  bail = (reason, fall) => { failReason = reason; bail0(reason, fall); };
+  let failReason = null, rot = 0, crash = null;
+  bail = (...a) => { failReason = a[0]; bail0(...a); };
   let t = 0, phase = 'settle', cruiseT = 0, maxT = 0, maxSpeed = 0, takeoff = null, landed = null, result = 'no jump';
   while (t < 30) {
     const d = boatZ - STERN_OFF - R.pos.z, xc = crestX(d);
@@ -78,12 +91,12 @@ RUN_JS = """
       R.steerIn = 0; R.flipIn = 0;
       const tr = cfg.trick;
       if (tr && R.state === 'air') {
-        const inp = R.airT < tr.charge ? 1 : tr.after === 'tuck' ? 1 : tr.after === 'open' ? -1 : 0;
+        const inp = (R.airT < tr.charge ? 1 : tr.after === 'tuck' ? 1 : tr.after === 'open' ? -1 : 0) * (tr.dir || 1);
         if (tr.axis === 'spin') R.steerIn = inp; else R.flipIn = -inp;   // down arrow: backroll
       }
     }
     const was = R.state;
-    boatZ += BOAT_SPEED*dt; simTime += dt; stepRider(dt);
+    boatZ += BOAT_SPEED*dt; simTime += dt; stepRider(dt); updateRiderVisual(dt);   // the pose feeds the ragdoll
     if (phase === 'edge' || phase === 'go') {
       maxT = Math.max(maxT, R.tension/(RIDER_M*G));
       maxSpeed = Math.max(maxSpeed, Math.hypot(R.vel.x, R.vel.z));
@@ -93,12 +106,27 @@ RUN_JS = """
     }
     t += dt;
   }
+  if (cfg.follow && result === 'bail') {
+    // follow the ragdoll: slide, when it stops, how deep the head goes, which way the chest faces, whether it floats
+    const g = RAG, I = g.I, start = R.pos.clone(), head = () => g.p[I.head];
+    const chestUp = () => g.p[I.cf].clone().sub(g.p[I.shF].clone().add(g.p[I.shB]).multiplyScalar(0.5)).normalize().y;
+    let stopT = null, deepHead = 0, chest = null;
+    for (let bt = 0; bt < 2.3; bt += dt) {
+      boatZ += BOAT_SPEED*dt; simTime += dt; stepRider(dt); updateRiderVisual(dt);
+      const h = head(); deepHead = Math.max(deepHead, waterAt(h.x, h.z, boatZ, simTime) - h.y);
+      if (stopT === null && bt > 0.05 && R.vel.length() < 1) stopT = bt;
+      if (chest === null && bt >= 0.3) chest = chestUp();
+    }
+    const h = head();
+    crash = {slide: Math.hypot(R.pos.x - start.x, R.pos.z - start.z), stopT: stopT === null ? 9 : stopT, deepHead,
+             headEnd: h.y - waterAt(h.x, h.z, boatZ, simTime), chest};
+  }
   bail = bail0;
   const d = boatZ - STERN_OFF - R.pos.z;
   const wake = [];
   for (let u = -7; u <= 7.001; u += 0.05) wake.push([u, wakeH(u, d)]);
   const peak = traj.reduce((m, p) => Math.max(m, p[1]), -9);
-  return {cfg, result, traj, wake, takeoff, landed, farCrest: crestX(d), cruiseT, maxT, rot, failReason,
+  return {cfg, result, traj, wake, takeoff, landed, farCrest: crestX(d), cruiseT, maxT, rot, failReason, crash,
           landingSpeed: R.lastLanding ? R.lastLanding.vn : null,
           speedRatio: maxSpeed/BOAT_SPEED, airT: traj.length ? traj[traj.length-1][2] : 0,
           aboveLip: takeoff ? peak - takeoff.lip : 0};
@@ -138,11 +166,12 @@ def run_bench(three_path=None):
         for cfg in RUNS:
             results.append(page.evaluate(RUN_JS, cfg))
         tricks = [page.evaluate(RUN_JS, {"cut": 6, "mode": "pop", "trick": tr}) for tr in TRICKS]
+        crashes = [page.evaluate(RUN_JS, {"cut": 3, "mode": "pop", "trick": c["trick"], "follow": True}) for c in CRASHES]
         browser.close()
     server.shutdown()
     if errors:
         raise SystemExit("page errors:\n" + "\n".join(errors))
-    return results, tricks
+    return results, tricks, crashes
 
 
 def report(results):
@@ -180,6 +209,29 @@ def report_tricks(tricks):
         speed = f"{r['landingSpeed']:.1f}" if r["landingSpeed"] is not None else "-"
         outcome = "rode away" if rode else (r["failReason"] or r["result"])
         print(f"{tr['name']:<22}{r['rot']:>7.0f}°{lands_as:>9}°{speed:>13}  {'PASS' if ok else 'MISS'}  {outcome}")
+    return ok_all
+
+
+def report_crashes(crashes):
+    print(f"\n{'crash (popped 3 m)':<18}{'slide m':>9}{'stops s':>9}{'head deepest m':>16}{'head at end m':>15}{'chest 0.3 s':>13}  result")
+    ok_all = True
+    for spec, r in zip(CRASHES, crashes):
+        c = r["crash"]
+        if c is None:
+            print(f"{spec['name']:<18}  MISS  no crash ({r['result']})")
+            ok_all = False
+            continue
+        ok = spec["reason"] in (r["failReason"] or "")
+        ok &= all(lo <= c[key] <= hi for key, _, lo, hi in CRASH_TARGETS)
+        if spec["fall"] == "up":
+            ok &= c["chest"] > 0.3
+        elif spec["fall"] == "down":
+            ok &= c["chest"] < -0.3
+        ok_all &= ok
+        print(f"{spec['name']:<18}{c['slide']:>9.2f}{c['stopT']:>9.2f}{c['deepHead']:>16.2f}{c['headEnd']:>15.2f}{c['chest']:>13.2f}"
+              f"  {'PASS' if ok else 'MISS'}  {r['failReason']}")
+    print("targets: " + ", ".join(f"{label} {lo}-{hi}" for _, label, lo, hi in CRASH_TARGETS)
+          + "; chest faces up (>0.3) after a heel catch, down (<-0.3) after a toe catch")
     return ok_all
 
 
@@ -228,8 +280,9 @@ if __name__ == "__main__":
     ap.add_argument("--three", help="local three.min.js (r128) to use instead of the CDN")
     ap.add_argument("--out", default=str(ROOT / "tools" / "out" / "jump_bench.png"))
     args = ap.parse_args()
-    res, tricks = run_bench(args.three)
+    res, tricks, crashes = run_bench(args.three)
     passed = report(res)
     passed &= report_tricks(tricks)
+    passed &= report_crashes(crashes)
     plot(res, pathlib.Path(args.out))
     raise SystemExit(0 if passed else 1)
