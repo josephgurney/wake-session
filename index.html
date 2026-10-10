@@ -20,29 +20,34 @@
   --danger:var(--pink);
   --display:"Barlow Condensed","Arial Narrow",Impact,sans-serif;
   --body:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  /* the notch / Dynamic Island and rounded corners; a phone held sideways has them left and right */
+  --safe-t:env(safe-area-inset-top,0px);
+  --safe-r:env(safe-area-inset-right,0px);
+  --safe-b:env(safe-area-inset-bottom,0px);
+  --safe-l:env(safe-area-inset-left,0px);
   color-scheme:dark;
 }
 html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);overflow:hidden;touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 body{padding:0}
 #c{position:fixed;inset:0;width:100%;height:100%;display:block;outline:none;touch-action:none}
-#hud{position:fixed;inset:0;z-index:6;pointer-events:none;padding:calc(14px + env(safe-area-inset-top,0px)) 16px calc(14px + env(safe-area-inset-bottom,0px));box-sizing:border-box}
+#hud{position:fixed;inset:0;z-index:6;pointer-events:none;padding:calc(14px + var(--safe-t)) 16px calc(14px + var(--safe-b));box-sizing:border-box}
 .panel{position:absolute;background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:8px 12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);min-width:0}
-.tl{left:16px;top:calc(14px + env(safe-area-inset-top,0px))}
-.tr{right:16px;top:calc(14px + env(safe-area-inset-top,0px));text-align:right}
+.tl{left:max(16px,var(--safe-l));top:calc(14px + var(--safe-t))}
+.tr{right:max(16px,var(--safe-r));top:calc(14px + var(--safe-t));text-align:right}
 .label{font-family:var(--body);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-dim)}
 .big{font-family:var(--display);font-weight:800;font-size:40px;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:.01em}
-.big span{font-size:16px;font-weight:700;color:var(--ink-dim);margin-left:4px;letter-spacing:.06em}
+.big .unit{font-size:16px;font-weight:700;color:var(--ink-dim);margin-left:4px;letter-spacing:.06em}
 .small{font-size:12px;color:var(--ink-dim);margin-top:4px;font-variant-numeric:tabular-nums}
 .small b{color:var(--ink);font-weight:500}
 #airline{font-family:var(--display);font-weight:700;font-size:18px;color:var(--accent);margin-top:4px;min-height:20px;letter-spacing:.03em;text-transform:uppercase}
 #trick{position:absolute;left:50%;top:22%;transform:translate(-50%,0);text-align:center;opacity:0;font-family:var(--display);text-transform:uppercase;pointer-events:none;text-shadow:3px 3px 0 var(--navy),0 2px 14px rgba(0,0,0,.5)}
-#trick .name{font-size:clamp(28px,6vw,64px);font-weight:800;line-height:1;letter-spacing:.02em;color:#fff;text-wrap:balance}
-#trick .pts{font-size:clamp(20px,3.6vw,36px);font-weight:700;color:var(--accent);margin-top:4px;font-variant-numeric:tabular-nums}
+#trick .name{font-size:clamp(28px,min(6vw,11vh),64px);font-weight:800;line-height:1;letter-spacing:.02em;color:#fff;text-wrap:balance}
+#trick .pts{font-size:clamp(20px,min(3.6vw,7vh),36px);font-weight:700;color:var(--accent);margin-top:4px;font-variant-numeric:tabular-nums}
 #trick .sub{font-family:var(--body);text-transform:none;font-size:13px;color:var(--ink);margin-top:6px;text-shadow:0 1px 6px rgba(0,0,0,.7)}
 #trick.show{animation:pop 2.6s ease-out forwards}
 #trick.bail .name{color:var(--danger)}
 @keyframes pop{0%{opacity:0;transform:translate(-50%,14px) scale(.92)}8%{opacity:1;transform:translate(-50%,0) scale(1.04)}14%{transform:translate(-50%,0) scale(1)}75%{opacity:1}100%{opacity:0;transform:translate(-50%,-10px)}}
-#controls{position:absolute;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;gap:6px 18px;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 32px);font-size:12px;color:var(--ink-dim);background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:7px 12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+#controls{position:absolute;left:50%;bottom:calc(14px + var(--safe-b));transform:translateX(-50%);display:flex;gap:6px 18px;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 32px);font-size:12px;color:var(--ink-dim);background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:7px 12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 #controls kbd,#dj kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase}
 #start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(17,14,42,.35),rgba(17,14,42,.88));pointer-events:auto;transition:opacity .5s;overflow-y:auto;touch-action:pan-y;padding:12px 0;box-sizing:border-box}
 #start.hide{opacity:0;pointer-events:none}
@@ -66,10 +71,9 @@ body{padding:0}
 .card .note{font-size:12px;margin-top:10px;text-align:center}
 #fade{position:absolute;inset:0;background:#110e2a;opacity:0;pointer-events:none;transition:opacity .25s}
 /* the Lobster logo rides along at the top centre once the session starts */
-#bug{position:absolute;left:50%;top:calc(10px + env(safe-area-inset-top,0px));transform:translateX(-50%);height:clamp(40px,7vh,60px);width:auto;opacity:0;transition:opacity .6s;filter:drop-shadow(0 2px 6px rgba(0,0,0,.35))}
+#bug{position:absolute;left:50%;top:calc(10px + var(--safe-t));transform:translateX(-50%);height:clamp(40px,7vh,60px);width:auto;opacity:0;transition:opacity .6s;filter:drop-shadow(0 2px 6px rgba(0,0,0,.35))}
 body.started #bug{opacity:1}
-@media (max-width:560px){#bug{top:calc(14px + env(safe-area-inset-top,0px) + 108px);height:36px}}
-#gp{position:absolute;right:16px;bottom:calc(14px + env(safe-area-inset-bottom,0px));font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);display:none}
+#gp{position:absolute;right:max(16px,var(--safe-r));bottom:calc(14px + var(--safe-b));font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);display:none}
 /* left column: score, then DJ Poorly P's deck (the remote for the boat's sound system) */
 .stack{position:absolute;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
 .stack .panel{position:relative}
@@ -124,7 +128,7 @@ body.touch #settings .kbd-only{display:none}
 /* the SoundCloud widget itself stays out of sight unless the browser insists on a tap inside it to start */
 #sc{position:absolute;left:-10000px;top:0;width:250px;height:166px;border:0;border-radius:6px}
 #sc.show{position:relative;left:0;pointer-events:auto}
-@media (max-width:640px){.big{font-size:30px}#controls{display:none}.card .grid{grid-template-columns:1fr}.card{padding:22px}#dj{width:220px}}
+@media (max-width:640px){#controls{display:none}.card .grid{grid-template-columns:1fr}.card{padding:22px}}
 @media (prefers-reduced-motion:reduce){#dj.playing .eq i{animation:none;height:8px}#dj.flash{animation:none}}
 /* touch layer */
 #touch{position:fixed;inset:0;pointer-events:none;z-index:5;touch-action:none}
@@ -138,7 +142,7 @@ body.touch .card .grid.tc{display:grid}
 #stick-base{position:absolute;width:104px;height:104px;margin:-52px 0 0 -52px;border-radius:50%;background:rgba(31,27,72,.35);border:1.5px solid rgba(255,255,255,.35);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
 #stick-base[hidden]{display:none}
 #stick-knob{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:rgba(255,255,255,.85);box-shadow:0 2px 10px rgba(0,0,0,.35)}
-#pad{position:absolute;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:auto auto;grid-template-areas:"grabs grabs" "rolls pop";gap:10px;align-items:end;justify-items:end}
+#pad{position:absolute;right:max(14px,var(--safe-r));bottom:calc(14px + var(--safe-b));display:grid;grid-template-columns:auto auto;grid-template-areas:"grabs grabs" "rolls pop";gap:10px;align-items:end;justify-items:end}
 #touch button{pointer-events:auto;touch-action:none;font-family:var(--display);font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink);background:rgba(31,27,72,.55);border:1.5px solid rgba(255,255,255,.3);border-radius:12px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
 #touch button.on{background:var(--accent);color:var(--navy);border-color:var(--accent)}
 #touch button:focus-visible{outline:2px solid #fff}
@@ -148,10 +152,70 @@ body.touch .card .grid.tc{display:grid}
 .rolls button{width:88px;height:40px;font-size:13px}
 #b-pop{grid-area:pop;width:96px;height:96px;border-radius:50%;font-size:24px;font-weight:800;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1}
 #b-pop small{font-family:var(--body);font-weight:500;font-size:10px;letter-spacing:.1em;opacity:.8;margin-top:4px}
-#tapbar{position:absolute;right:16px;top:calc(14px + env(safe-area-inset-top,0px) + 108px);display:flex;gap:8px}
+#tapbar{position:absolute;right:max(16px,var(--safe-r));top:calc(14px + var(--safe-t) + 152px);display:flex;gap:8px}
 #tapbar button{height:34px;padding:0 12px;font-size:13px}
-#rotate{position:absolute;left:50%;top:calc(14px + env(safe-area-inset-top,0px) + 108px);transform:translateX(-50%);display:none;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:6px 10px;white-space:nowrap}
-@media (orientation:portrait){body.touch #rotate{display:block;top:calc(14px + env(safe-area-inset-top,0px) + 300px)}body.touch #dj{margin-top:24px}}
+#rotate{position:absolute;left:50%;top:calc(14px + var(--safe-t) + 108px);transform:translateX(-50%);display:none;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);background:var(--glass);border:1px solid var(--glass-edge);border-radius:6px;padding:6px 10px;white-space:nowrap}
+@media (orientation:portrait){body.touch #rotate{display:block;animation:hint 7s forwards}}
+@keyframes hint{0%,85%{opacity:1}100%{opacity:0;visibility:hidden}}
+/* Compact HUD, for phones and any small window: small read-outs along the top edge, the lower corners left clear for
+   thumbs. It all still works the same; only the fixed lines (rope, boat speed, render quality) drop out. */
+@media (max-width:640px),(max-height:540px){
+  .tl{left:max(10px,var(--safe-l));top:calc(8px + var(--safe-t))}
+  .tr{right:max(10px,var(--safe-r));top:calc(8px + var(--safe-t))}
+  .stack{gap:6px}
+  .panel{padding:6px 10px 7px;border-radius:8px}
+  .long,.tr .static{display:none}
+  /* score: the number with its label and falls beside it, the best trick underneath */
+  .score{display:grid;grid-template-columns:auto 1fr;grid-template-areas:"score label" "score falls" "best best";column-gap:8px;box-sizing:border-box}
+  .score .label{grid-area:label;align-self:end;font-size:9px}
+  #score{grid-area:score;font-size:28px}
+  #falls{grid-area:falls;align-self:start;margin-top:1px;font-size:11px;white-space:nowrap}
+  #best{grid-area:best;margin-top:3px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* speed and line load, with the air read-out hanging underneath */
+  .tr .big{font-size:28px}
+  .tr .big .unit{font-size:13px;margin-left:3px}
+  .tr .small{margin-top:1px;font-size:11px}
+  #airline{position:absolute;right:0;top:100%;margin-top:6px;min-height:0;font-size:16px;white-space:nowrap;text-shadow:2px 2px 0 var(--navy),0 1px 8px rgba(0,0,0,.5)}
+  /* DJ deck: art and title, the buttons under them, the progress as a hairline along the bottom */
+  #dj{display:grid;grid-template-columns:34px minmax(0,1fr);grid-template-areas:"art meta" "ctl ctl";align-items:center;gap:6px 8px;width:210px;padding:6px 6px 8px}
+  #dj .label{display:none}
+  #dj .row{display:contents}
+  #dj .art{grid-area:art;width:34px;height:34px}
+  #dj .meta{grid-area:meta}
+  #dj .title{font-size:15px}
+  #dj .by{font-size:10px;margin-top:2px}
+  #dj .bar{position:absolute;left:6px;right:6px;bottom:3px;height:2px;margin:0}
+  #dj .ctl{grid-area:ctl;margin:0;gap:4px}
+  #dj button{width:32px;height:32px}
+  #dj #dj-set{margin-left:auto}
+  #bug{top:calc(8px + var(--safe-t));height:30px}
+  #tapbar{top:calc(8px + var(--safe-t));right:max(10px,var(--safe-r));gap:6px}
+  #tapbar button{width:58px;height:40px;padding:0}
+}
+/* phone on its side: the score and DJ cards make one column, and a trick callout stays narrow enough to pass between
+   it and the mirror-image space on the right (a long name wraps). Cam and Reset take the top corner with the speed
+   beside them, and the grabs line up in one row above Tantrum and Pop rather than climbing the side of the screen
+   under the read-outs. While Safari asks for a tap on the SoundCloud player, the score steps aside to make room. */
+@media (max-height:540px){
+  .stack{align-items:stretch}
+  .score{max-width:240px}
+  .stack:has(#sc.show) .score{display:none}
+  #trick{max-width:calc(100% - 2 * (max(10px,var(--safe-l)) + 252px))}
+  body.touch .tr{right:calc(max(10px,var(--safe-r)) + 130px)}
+  .grabs{grid-template-columns:repeat(4,54px);gap:6px}
+  .grabs button{height:40px}
+  #pad{gap:8px}
+}
+/* phone upright: the score card stays narrow so the logo fits between it and the speed (the best trick wraps), Cam
+   and Reset sit under the speed, and the trick callout drops below the read-outs */
+@media (max-width:640px) and (min-height:541px){
+  .score{max-width:calc(50vw - 66px)}
+  #best{white-space:normal}
+  #tapbar{top:calc(8px + var(--safe-t) + 60px)}
+  body.touch #airline{margin-top:52px}
+  #trick{top:30%}
+  #rotate{top:calc(var(--safe-t) + 200px)}
+}
 @media (prefers-reduced-motion:reduce){#trick.show{animation-duration:2.2s}}
 </style>
 </head>
@@ -170,8 +234,8 @@ body.touch .card .grid.tc{display:grid}
 </div>
 <div id="hud">
   <div class="stack tl">
-    <div class="panel">
-      <div class="label">Session score</div>
+    <div class="panel score">
+      <div class="label"><span class="long">Session </span>score</div>
       <div class="big" id="score">0</div>
       <div class="small" id="best">Best trick: none yet</div>
       <div class="small" id="falls">Falls: 0</div>
@@ -193,10 +257,10 @@ body.touch .card .grid.tc{display:grid}
     <iframe id="sc" title="DJ Poorly P on SoundCloud" allow="autoplay; encrypted-media"></iframe>
   </div>
   <div class="panel tr">
-    <div class="big"><span id="speed">0</span><span>mph</span></div>
-    <div class="small"><b>65 ft</b> rope · boat <b>21 mph</b></div>
-    <div class="small">line load <b id="line">0.0×</b> body weight</div>
-    <div class="small" id="quality">quality: high (auto)</div>
+    <div class="big"><span id="speed">0</span><span class="unit">mph</span></div>
+    <div class="small static"><b>65 ft</b> rope · boat <b>21 mph</b></div>
+    <div class="small">line load <b id="line">0.0×</b><span class="long"> body weight</span></div>
+    <div class="small static" id="quality">quality: high (auto)</div>
     <div id="airline"></div>
   </div>
   <div id="trick"><div class="name"></div><div class="pts"></div><div class="sub"></div></div>
