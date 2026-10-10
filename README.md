@@ -35,7 +35,7 @@ Keyboard, gamepad or touch. Sound and music start on the first input. On a phone
 
 **Touch:** drag anywhere on the left half for a floating stick (left/right to edge, and off the lip to spin; up/down in the air for front roll / backroll). Right side: hold **Pop** to load and release at the lip, hold a grab button while airborne, hold **Tantrum** or **Front flip** to rotate, tap **Cam** or **Reset**. The DJ panel under the score plays, pauses and skips the music, and its sliders button opens Settings.
 
-On a phone (or any window under 540 px tall or 640 px wide) the HUD goes compact, so the water stays clear and the thumbs have room: score, best trick and falls in one small card top left with the DJ deck as a single row under it, speed and line load top right, and the fixed lines (rope, boat speed, render quality) drop out. Held sideways, Cam and Reset sit in the top-right corner and the grabs line up in one row above Tantrum and Pop. Everything keeps clear of the notch and the rounded corners.
+On a phone (or any window under 540 px tall or 640 px wide) the HUD goes compact, so the water stays clear and the thumbs have room: score, best trick and falls in one small card top left, speed and line load top right, and the fixed lines (rope, boat speed, render quality) drop out. The DJ deck under the score rolls up to one line, what's playing and play/pause; its ▾ button (or a tap on the title) opens the full deck with skip and the volume sliders, and it rolls itself back up after 8 seconds left alone. Held sideways, Cam and Reset sit in the top-right corner and the grabs line up in one row above Tantrum and Pop. Everything keeps clear of the notch and the rounded corners.
 
 ## How it works
 

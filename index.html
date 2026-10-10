@@ -105,6 +105,7 @@ body.started #bug{opacity:1}
 #dj.playing .i-pause{display:block}
 #dj #dj-set{margin-left:auto}
 #dj #dj-set svg{fill:none}
+#dj #dj-more{display:none}
 /* settings: a modal over the paused ride */
 #settings{width:min(420px,calc(100% - 32px));box-sizing:border-box;padding:0;color:var(--ink);background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);font-family:var(--body);max-height:calc(100% - 24px);overflow:auto}
 #settings::backdrop{background:rgba(17,14,42,.55)}
@@ -177,7 +178,7 @@ body.touch .card .grid.tc{display:grid}
   .tr .small{margin-top:1px;font-size:11px}
   #airline{position:absolute;right:0;top:100%;margin-top:6px;min-height:0;font-size:16px;white-space:nowrap;text-shadow:2px 2px 0 var(--navy),0 1px 8px rgba(0,0,0,.5)}
   /* DJ deck: art and title, the buttons under them, the progress as a hairline along the bottom */
-  #dj{display:grid;grid-template-columns:34px minmax(0,1fr);grid-template-areas:"art meta" "ctl ctl";align-items:center;gap:6px 8px;width:210px;padding:6px 6px 8px}
+  #dj{display:grid;grid-template-columns:34px minmax(0,1fr) auto;grid-template-areas:"art meta more" "ctl ctl ctl";align-items:center;gap:6px 8px;width:210px;padding:6px 6px 8px}
   #dj .label{display:none}
   #dj .row{display:contents}
   #dj .art{grid-area:art;width:34px;height:34px}
@@ -188,6 +189,18 @@ body.touch .card .grid.tc{display:grid}
   #dj .ctl{grid-area:ctl;margin:0;gap:4px}
   #dj button{width:32px;height:32px}
   #dj #dj-set{margin-left:auto}
+  #dj #dj-more{display:grid;grid-area:more;align-self:start;background:none;border-color:transparent}
+  #dj #dj-more svg{fill:none;transform:rotate(180deg)}
+  /* rolled up (the default): one line, what's playing and play/pause; the chevron or a tap on the title opens it */
+  #dj.rolled{grid-template-columns:26px minmax(0,1fr) auto auto;grid-template-areas:"art meta play more";column-gap:6px;padding:5px 5px 7px}
+  #dj.rolled .art{width:26px;height:26px}
+  #dj.rolled .title{font-size:14px}
+  #dj.rolled .by,#dj.rolled #dj-prev,#dj.rolled #dj-next,#dj.rolled #dj-set{display:none}
+  #dj.rolled .ctl{display:contents}
+  #dj.rolled #dj-play{grid-area:play}
+  #dj.rolled #dj-more{align-self:center}
+  #dj.rolled #dj-more svg{transform:none}
+  #dj.rolled .art,#dj.rolled .meta{cursor:pointer}
   #bug{top:calc(8px + var(--safe-t));height:30px}
   #tapbar{top:calc(8px + var(--safe-t));right:max(10px,var(--safe-r));gap:6px}
   #tapbar button{width:58px;height:40px;padding:0}
@@ -240,7 +253,7 @@ body.touch .card .grid.tc{display:grid}
       <div class="small" id="best">Best trick: none yet</div>
       <div class="small" id="falls">Falls: 0</div>
     </div>
-    <div class="panel" id="dj" role="region" aria-label="Music from the boat">
+    <div class="panel rolled" id="dj" role="region" aria-label="Music from the boat">
       <div class="label"><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span><span>On the boat · DJ Poorly P</span></div>
       <div class="row">
         <div class="art" id="dj-art" aria-hidden="true"></div>
@@ -253,6 +266,7 @@ body.touch .card .grid.tc{display:grid}
         <button type="button" id="dj-next" aria-label="Next tune"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11 3h2v10h-2zM2 3v10l8-5z"/></svg></button>
         <button type="button" id="dj-set" aria-label="Settings: music, boat and effects volume" aria-haspopup="dialog"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h6.5M13 4.5h1M2 11.5h1.5M8 11.5h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="10.6" cy="4.5" r="2" stroke="currentColor" stroke-width="1.6"/><circle cx="5.6" cy="11.5" r="2" stroke="currentColor" stroke-width="1.6"/></svg></button>
       </div>
+      <button type="button" id="dj-more" aria-expanded="false" aria-label="Show the music player"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </div>
     <iframe id="sc" title="DJ Poorly P on SoundCloud" allow="autoplay; encrypted-media"></iframe>
   </div>
@@ -306,7 +320,7 @@ body.touch .card .grid.tc{display:grid}
         <div><span><kbd>Grabs</kbd></span><span>hold any grab button while airborne</span></div>
         <div><span><kbd>Tantrum</kbd> <kbd>Front flip</kbd></span><span>hold in the air to rotate</span></div>
         <div><span><kbd>Cam</kbd> <kbd>Reset</kbd></span><span>tap to switch view or get back behind the boat</span></div>
-        <div><span><kbd>DJ panel</kbd></span><span>top left: play, pause or skip Poorly P's tunes, and the sliders button for volume</span></div>
+        <div><span><kbd>DJ panel</kbd></span><span>top left: play, pause or skip Poorly P's tunes, and the sliders button for volume (on a phone, tap ▾ to open it)</span></div>
       </div>
       <button id="go" type="button" disabled>Take the handle</button>
       <div class="note label">Keyboard, gamepad or touch · sound and music start on first input</div>
@@ -2442,13 +2456,25 @@ function djUpdate(dt){
   if(!dj.ready)return;
   // Some browsers (Safari mostly) won't let a hidden player start. If nothing is playing a few seconds after asking,
   // show the SoundCloud player itself so one tap inside it starts the set; it tucks away again once music plays.
-  if(dj.blockAt && performance.now()>dj.blockAt){ dj.blockAt=0; if(dj.want && !dj.playing){ djEl.frame.classList.add('show'); djStatus('Tap play below ↓','Your browser asks for one tap'); } }
+  if(dj.blockAt && performance.now()>dj.blockAt){ dj.blockAt=0; if(dj.want && !dj.playing){ djEl.frame.classList.add('show'); djStatus('Tap play below ↓','Your browser asks for one tap'); djRoll(false); } }
   djVolume();
   dj.progT+=dt; if(dj.progT>0.25){ dj.progT=0; djEl.bar.style.width=(clamp(dj.prog,0,1)*100).toFixed(1)+'%'; }
 }
 // a mouse or touch press hands the keyboard straight back to the game, so Space pops instead of pausing the music
 for(const [id,fn] of [['dj-play',djToggle],['dj-next',djNext],['dj-prev',djPrev]])
   document.getElementById(id).addEventListener('click',e=>{ fn(); if(e.detail)canvas.focus(); });
+// On a phone the deck rolls up to one line: what's playing and play/pause. The chevron, or a tap on the title, opens
+// the full deck, and it rolls itself up again once it's been left alone for a few seconds (not while Safari is still
+// waiting for a tap on the SoundCloud player). The full-size HUD ignores all this and always shows the whole deck.
+const djMore=document.getElementById('dj-more'); let djRollT=0;
+function djRoll(up){
+  djEl.panel.classList.toggle('rolled',up);
+  djMore.setAttribute('aria-expanded',String(!up)); djMore.setAttribute('aria-label',up?'Show the music player':'Hide the music player');
+  clearTimeout(djRollT); if(!up)djRollT=setTimeout(()=>djRoll(!djEl.frame.classList.contains('show')),8000);
+}
+djMore.addEventListener('click',e=>{ djRoll(!djEl.panel.classList.contains('rolled')); if(e.detail)canvas.focus(); });
+djEl.panel.querySelector('.row').addEventListener('click',()=>{ if(djEl.panel.classList.contains('rolled'))djRoll(false); });
+djEl.panel.addEventListener('pointerdown',()=>{ if(!djEl.panel.classList.contains('rolled'))djRoll(false); });   // a tap on the open deck keeps it open a while longer
 
 // ---------- settings: sound volumes, over a paused ride ----------
 const settingsEl=document.getElementById('settings');
