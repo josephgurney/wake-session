@@ -51,7 +51,43 @@ body{padding:0}
 #controls kbd,#dj kbd{font-family:var(--display);font-weight:700;font-size:12px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;border-radius:4px;padding:1px 6px;letter-spacing:.04em;text-transform:uppercase}
 #start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 40%,rgba(17,14,42,.35),rgba(17,14,42,.88));pointer-events:auto;transition:opacity .5s;overflow-y:auto;touch-action:pan-y;padding:12px 0;box-sizing:border-box}
 #start.hide{opacity:0;pointer-events:none}
-.card{margin:auto;max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:24px 30px 22px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.card{position:relative;margin:auto;max-width:560px;width:calc(100% - 32px);box-sizing:border-box;background:var(--glass);border:1px solid var(--glass-edge);border-radius:10px;padding:24px 30px 22px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+/* the version in the card's corner, small enough to ignore, there to show a stale cache at a glance */
+.card .ver{position:absolute;top:9px;right:12px;font-size:10px;letter-spacing:.08em;color:var(--ink-dim);opacity:.55;font-variant-numeric:tabular-nums;pointer-events:none}
+/* loading screen: covers the start screen while the game loads, then fades away and the card rises in its place */
+#start.loading .card{display:none}
+#start:not(.loading) .card{animation:cardin .5s ease-out}
+@keyframes cardin{from{opacity:0;transform:translateY(10px)}}
+#loader{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:16px;box-sizing:border-box;text-align:center;background:radial-gradient(ellipse at 50% 42%,#2a2462,var(--bg) 72%);transition:opacity .6s,visibility 0s .6s}
+#start:not(.loading) #loader{opacity:0;visibility:hidden;pointer-events:none}
+#loader .logo{display:block;height:clamp(48px,8vw,64px);width:auto}
+#loader .name{font-family:var(--display);font-weight:800;font-size:clamp(34px,7vw,56px);line-height:.92;text-transform:uppercase;letter-spacing:.01em}
+#loader .name em{font-style:normal;color:var(--accent);white-space:nowrap}
+/* a board riding the wake: the waves slide left, and the board bobs and tilts in step with the front one (its period and
+   phase are worked out in the boot script that draws them), with a backroll off the crest every few seconds. All of it is
+   transform-only, so it keeps moving while the main thread is busy building the world. */
+#loader .wake{position:relative;width:240px;height:56px;overflow:hidden;margin-top:6px;-webkit-mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent);mask-image:linear-gradient(90deg,transparent,#000 18%,#000 82%,transparent)}
+#loader .wake svg{position:absolute;left:0;top:0;width:480px;height:56px;overflow:visible}
+#loader .w1{animation:wave 3s linear infinite}
+#loader .w2{animation:wave 7s linear infinite}
+#loader .wake .fill{fill:url(#wake-fill)}
+#loader .wake .line{fill:none;stroke:rgba(255,255,255,.22);stroke-width:1.5;stroke-linejoin:round}
+#loader .w1 .line{stroke:var(--accent);stroke-width:2.5}
+@keyframes wave{to{transform:translateX(-240px)}}
+#loader .ride{position:absolute;left:120px;top:26px;animation:bob 1s cubic-bezier(.37,0,.63,1) infinite}
+#loader .tilt{animation:tilt 1s cubic-bezier(.37,0,.63,1) -.25s infinite}
+#loader .hop{animation:hop 4s infinite}
+#loader .board{position:absolute;left:-16px;top:-7px;width:32px;height:6px;border-radius:3px;background:var(--pink);box-shadow:inset 0 -2px 0 rgba(0,0,0,.25)}
+@keyframes bob{50%{transform:translateY(8px)}}
+@keyframes tilt{0%,100%{transform:rotate(-17deg)}50%{transform:rotate(17deg)}}
+@keyframes hop{0%,50%{transform:none;animation-timing-function:cubic-bezier(.2,.7,.4,1)}61%{transform:translateY(-22px) rotate(-180deg);animation-timing-function:cubic-bezier(.6,0,.8,.3)}72%,100%{transform:rotate(-360deg)}}
+#loader .bar{width:240px;height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
+#loader .bar i{display:block;height:100%;background:var(--accent);transform:scaleX(0);transform-origin:left;transition:transform .35s ease-out}
+#boot-msg{font-family:var(--display);font-weight:700;font-size:16px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-dim);max-width:32ch;min-height:1.2em}
+#loader.failed .bar i{background:var(--pink)}
+#loader.failed #boot-msg{color:var(--ink)}
+#loader.failed .wake *{animation-play-state:paused}
+@media (prefers-reduced-motion:reduce){#loader .wake *{animation:none}#start:not(.loading) .card{animation:none}}
 .card .presents{font-family:var(--display);font-weight:700;font-size:clamp(14px,2.4vw,18px);letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 10px}
 .card .presents b{font-weight:800;color:var(--ink)}
 .card .presents{display:flex;align-items:center;gap:12px;margin:0 0 10px;font-family:var(--display);font-weight:700;font-size:clamp(13px,2.2vw,16px);letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim)}
@@ -293,8 +329,21 @@ body.touch .card .grid.tc{display:grid}
   <img id="bug" src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349">
   <div id="gp">Gamepad connected</div>
   <div id="fade"></div>
-  <div id="start">
+  <div id="start" class="loading">
+    <div id="loader">
+      <img class="logo" src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349">
+      <div class="name">Thursday <em>Yacht Club</em></div>
+      <div class="wake" aria-hidden="true">
+        <svg class="w2" viewBox="0 0 480 56"><path class="line"/></svg>
+        <svg class="w1" viewBox="0 0 480 56"><defs><linearGradient id="wake-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".09"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs><path class="fill"/><path class="line"/></svg>
+        <div class="ride"><div class="tilt"><div class="hop"><i class="board"></i></div></div></div>
+      </div>
+      <div class="bar" aria-hidden="true"><i id="boot-bar"></i></div>
+      <div id="boot-msg" role="status">Fuelling the boat</div>
+    </div>
     <div class="card">
+      <!-- the game's version: bump it with every change that lands on main, so a stale cache shows at a glance -->
+      <div class="ver" title="Game version">v0.6.0</div>
       <div class="presents"><img src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349"><span>presents</span></div>
       <h1>Thursday <em>Yacht Club</em></h1>
       <div class="tagline">No Risk, No Story.</div>
@@ -340,6 +389,55 @@ body.touch .card .grid.tc{display:grid}
   </form>
 </dialog>
 
+<script>
+// The loading screen, up before the 1.5 MB rider download starts. Each stage of the load moves the bar on and changes
+// the line under it; between stages the bar creeps toward the next one so it never sits dead still. The game calls
+// bootStep('ready') once the rider and crew are in and the shaders have compiled, and the card takes over.
+const BOOT_STEPS = {           // reached at → bar, and the line shown until the next stage
+  start:  [0,    'Fuelling the boat'],         // the rider model and the wordmark downloading
+  assets: [0.45, 'Untangling the rope'],       // three.js coming from the CDN
+  three:  [0.7,  'Filling the lake'],          // the game script building the world
+  game:   [0.8,  'Strapping the rider in'],    // the rider and the crew being unpacked
+  models: [0.92, 'Starting the engine'],       // a few frames drawn so the shaders compile
+  ready:  [1,    'Ready to send'] };
+const BOOT_ORDER = Object.keys(BOOT_STEPS);
+let bootAt = 0, bootShown = 0, bootFailed = false;
+const bootBar = document.getElementById('boot-bar'), bootMsg = document.getElementById('boot-msg');
+const bootDraw = () => { bootBar.style.transform = `scaleX(${bootShown})`; };
+const bootCreep = setInterval(() => {         // ease toward just short of the next stage
+  const next = BOOT_STEPS[BOOT_ORDER[bootAt + 1]];
+  if (next) { bootShown += (next[0] - 0.03 - bootShown) * 0.04; bootDraw(); }
+}, 100);
+function bootStep(name) {
+  const i = BOOT_ORDER.indexOf(name);
+  if (bootFailed || i <= bootAt) return;
+  bootAt = i; bootShown = Math.max(bootShown, BOOT_STEPS[name][0]); bootDraw(); bootMsg.textContent = BOOT_STEPS[name][1];
+  if (name === 'ready') {
+    clearInterval(bootCreep);
+    setTimeout(() => {                         // let the bar visibly fill, then swap the loader for the card
+      document.getElementById('start').classList.remove('loading');
+      document.getElementById('go').disabled = false;
+    }, 350);
+  }
+}
+function bootFail(msg) {
+  bootFailed = true; clearInterval(bootCreep);
+  document.getElementById('loader').classList.add('failed'); bootMsg.textContent = msg;
+}
+// the two waves under the board: the front one has its crest under the board at the start, and slides 240 px (three of
+// its 80 px periods) in 3 s, so at the board it rises and falls once a second, which is what the bob and tilt are set to
+(() => {
+  const wave = (svg, mid, amp, period, phase) => {
+    let d = '';
+    for (let x = 0; x <= 480; x += 4) d += `${x ? 'L' : 'M'}${x} ${(mid - amp * Math.cos(2 * Math.PI * (x - phase) / period)).toFixed(2)}`;
+    svg.querySelector('.line').setAttribute('d', d);
+    const fill = svg.querySelector('.fill');  // the water under the line, fading out downward
+    if (fill) fill.setAttribute('d', d + 'L480 56L0 56Z');
+  };
+  wave(document.querySelector('#loader .w1'), 30, 4, 80, 120);
+  wave(document.querySelector('#loader .w2'), 34, 3, 120, 40);
+})();
+</script>
 <script src="assets/rider.js"></script>
 <script src="assets/lobster-wordmark.js"></script>
 <script type="importmap">
@@ -350,17 +448,28 @@ body.touch .card .grid.tc{display:grid}
 // three.js now ships only as ES modules. Load it, hand it to the game as the global THREE, then run the game script
 // below as an ordinary script, so its state and functions stay global (tools/jump_bench.py drives them from outside).
 try {
+  bootStep('assets');
   const T = await import('three');
   let GLTFLoader = null;
   try { ({ GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js')); } catch (e) { console.warn('GLTFLoader:', e); } // no loader: the primitive rider
   window.THREE = Object.assign({ GLTFLoader }, T);
+  bootStep('three');
+  // let the loader paint its new line before the game holds the main thread to build the world (the timeout covers a
+  // background tab, where animation frames wait until it's looked at)
+  await new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 100); });
   const game = document.createElement('script');
   game.textContent = document.getElementById('game').textContent;
+  // an error in the game script doesn't come back through appendChild, it goes to the window, so catch it there;
+  // otherwise the loader would wait forever for a game that never started
+  let crash = null; const onCrash = e => { crash = e.error || new Error(e.message); };
+  addEventListener('error', onCrash);
   document.body.appendChild(game);
-  document.getElementById('go').disabled = false; // ready: the button was held until the game could start
+  removeEventListener('error', onCrash);
+  if (crash) throw crash;
+  bootStep('game');  // the game reports 'models' and then 'ready' itself
 } catch (e) {
   console.error(e);
-  document.getElementById('go').textContent = "Couldn't load the game. Check your connection and reload.";
+  bootFail(window.THREE ? "The game couldn't start in this browser. Try reloading." : "Couldn't load the game. Check your connection and reload.");
 }
 </script>
 <script type="text/plain" id="game">
@@ -1216,10 +1325,10 @@ function crewSpecs(){
      wristsAt:(kl,kr,up,f)=>[kl,kr].map(k=>V3().copy(k).addScaledVector(up,0.06).addScaledVector(f,-0.1)),
      elbowPoles:[V3().copy(mL).addScaledVector(UP,-0.8),V3().copy(mL).negate().addScaledVector(UP,-0.8)], curl:0.4, watch:true, maxYaw:1.3, nod:0.12, phase:1.3}];
 }
-function loadCrew(){
-  if(!window.WAKE_RIDER_GLB||!THREE.GLTFLoader)return; // no model: the boat runs without a crew
-  let buf; try{ const s=atob(window.WAKE_RIDER_GLB); buf=new Uint8Array(s.length); for(let i=0;i<s.length;i++)buf[i]=s.charCodeAt(i); }catch(e){ return; }
-  for(const o of crewSpecs())new THREE.GLTFLoader().parse(buf.buffer,'',g=>{ try{ addCrew(g.scene,o); }catch(e){ console.warn('crew:',e); } },e=>console.warn('crew:',e));
+function loadCrew(){ // settles once every crew member is aboard (or has failed to load)
+  if(!window.WAKE_RIDER_GLB||!THREE.GLTFLoader)return Promise.resolve(); // no model: the boat runs without a crew
+  let buf; try{ const s=atob(window.WAKE_RIDER_GLB); buf=new Uint8Array(s.length); for(let i=0;i<s.length;i++)buf[i]=s.charCodeAt(i); }catch(e){ return Promise.resolve(); }
+  return Promise.all(crewSpecs().map(o=>new Promise(done=>new THREE.GLTFLoader().parse(buf.buffer,'',g=>{ try{ addCrew(g.scene,o); }catch(e){ console.warn('crew:',e); } done(); },e=>{ console.warn('crew:',e); done(); }))));
 }
 const _cq=new THREE.Quaternion(), _cq2=new THREE.Quaternion(), _cd=V3(), _cl=V3(), _cu=V3();
 function crewSet(F,n,q){ const b=F.bones[n]; F.wq[n].copy(q); b.quaternion.copy(_cq2.copy(F.wq[b.parent.name]).invert().multiply(q)); }
@@ -1714,11 +1823,13 @@ function frameQuat(a1,b1,a2,b2,out){
   _fm1.makeBasis(_fa,_fb,_fc).transpose(); _fm2.makeBasis(_ga,_gb,_gc).multiply(_fm1);
   return out.setFromRotationMatrix(_fm2);
 }
-function loadRiderModel(){
-  if(!window.WAKE_RIDER_GLB || !THREE.GLTFLoader) return; // no model: the primitive rider carries on
-  let buf;
-  try{ const s=atob(window.WAKE_RIDER_GLB); buf=new Uint8Array(s.length); for(let i=0;i<s.length;i++)buf[i]=s.charCodeAt(i); }catch(e){ return; }
-  new THREE.GLTFLoader().parse(buf.buffer,'',g=>{ try{ setupRig(g); }catch(e){ console.warn('rider model:',e); } },e=>console.warn('rider model:',e));
+function loadRiderModel(){ // settles once the model is on the rider (or has failed to load)
+  return new Promise(done=>{
+    if(!window.WAKE_RIDER_GLB || !THREE.GLTFLoader) return done(); // no model: the primitive rider carries on
+    let buf;
+    try{ const s=atob(window.WAKE_RIDER_GLB); buf=new Uint8Array(s.length); for(let i=0;i<s.length;i++)buf[i]=s.charCodeAt(i); }catch(e){ return done(); }
+    new THREE.GLTFLoader().parse(buf.buffer,'',g=>{ try{ setupRig(g); }catch(e){ console.warn('rider model:',e); } done(); },e=>{ console.warn('rider model:',e); done(); });
+  });
 }
 function setupRig(gltf){
   const model=gltf.scene, holder=new THREE.Group(), R=RIG;
@@ -2062,7 +2173,7 @@ let foamI=0; function dropFoam(x,z,s,yaw){const f=foamData[foamI];foamI=(foamI+1
 function updateFoam(dt,t){for(let i=0;i<FOAM_N;i++){const f=foamData[i];if(f.t<0){_m4.makeScale(0,0,0);foam.setMatrixAt(i,_m4);continue;}f.t+=dt;const life=3.2;if(f.t>life){f.t=-1;_m4.makeScale(0,0,0);foam.setMatrixAt(i,_m4);continue;}const k=f.t/life;const sc=f.s*(0.6+1.6*k);const y=waterAt(f.x,f.z,boatZ,t)+0.03;_qYaw.setFromAxisAngle(UP,f.yaw);_qD.copy(_qYaw).multiply(_qFlat);_m4.compose(_pp.set(f.x,y,f.z),_qD,_sc.set(sc*0.7,sc*1.5,1));foam.setMatrixAt(i,_m4);const a=Math.pow(1-k,1.8)*0.42;_col.setRGB(a,a,a);foam.setColorAt(i,_col);}foam.instanceMatrix.needsUpdate=true;if(foam.instanceColor)foam.instanceColor.needsUpdate=true;}
 
 // ---------- game state ----------
-let boatZ=0, simTime=0, started=false, muted=false;
+let boatZ=0, simTime=0, started=false, booted=false, muted=false; // booted: the loading screen has finished
 const R={
   state:'riding', pos:V3(), vel:V3(0,0,BOAT_SPEED), steer:0, steerIn:0, flipIn:0, rollIn:0,
   travelYaw:0, boardYaw:0, switchStance:false,
@@ -2645,7 +2756,8 @@ document.getElementById('dj-set').addEventListener('click',openSettings);
 // ---------- input ----------
 const keys={};
 const GRAB_KEYS={KeyA:'Melon',KeyD:'Indy',KeyW:'Nose',KeyS:'Tail'};
-function begin(){ if(started)return; started=true; document.getElementById('start').classList.add('hide'); document.body.classList.add('started'); initAudio(); djPlay(); canvas.focus(); }
+// nothing starts the session while the loading screen is still up; true once it's running
+function begin(){ if(!booted)return false; if(started)return true; started=true; document.getElementById('start').classList.add('hide'); document.body.classList.add('started'); initAudio(); djPlay(); canvas.focus(); return true; }
 function onDown(code){
   if(code==='Space'){ if(R.state==='riding'){R.loading=true;} }
   if(GRAB_KEYS[code])R.grabHeld[GRAB_KEYS[code]]=true;
@@ -2663,7 +2775,7 @@ function onUp(code){
 addEventListener('keydown',e=>{
   // with Settings open the dialog has the keyboard (arrows move sliders, Esc closes); only the music keys and mute pass
   if(settingsEl.open){ if(!e.repeat && ['KeyM','KeyN','KeyB'].includes(e.code))onDown(e.code); return; }
-  if(e.code==='Escape'){ e.preventDefault(); if(!e.repeat){ begin(); openSettings(); } return; }   // preventDefault, or this same Esc closes it again
+  if(e.code==='Escape'){ e.preventDefault(); if(!e.repeat && begin())openSettings(); return; }   // preventDefault, or this same Esc closes it again
   if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault(); if(e.repeat)return; keys[e.code]=true; begin(); onDown(e.code); });
 addEventListener('keyup',e=>{ keys[e.code]=false; if(!settingsEl.open)onUp(e.code); });
 addEventListener('blur',()=>{ for(const k in keys)keys[k]=false; for(const k in R.grabHeld)R.grabHeld[k]=false; R.loading=false; });
@@ -2765,7 +2877,12 @@ function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false)
   renderer.getDrawingBufferSize(_dbs); const bw=Math.max(2,Math.floor(_dbs.x)),bh=Math.max(2,Math.floor(_dbs.y));
   post.sceneRT.setSize(bw,bh); post.bright.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurA.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurB.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2));
   post.finalMat.uniforms.uRes.value.set(bw,bh); reflRT.setSize(Math.max(2,Math.floor(bw*reflScale)),Math.max(2,Math.floor(bh*reflScale))); }
-addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2); loadRiderModel(); loadCrew();
+addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2);
+// The loading screen holds the card back until the rider and the crew are in and a few frames have drawn them, so their
+// shaders have compiled before anyone takes the handle. If a model never reports back, it lets go after 15 s anyway.
+function bootDone(){ if(booted)return; booted=true; bootStep('ready'); }
+Promise.allSettled([loadRiderModel(),loadCrew()]).then(()=>{ bootStep('models'); let n=0; const tick=()=>{ if(++n<3)requestAnimationFrame(tick); else bootDone(); }; requestAnimationFrame(tick); });
+setTimeout(bootDone,15000);
 resetRider(); updateCamera(0,true); updateSessionHUD(); djBoot();
 Object.defineProperty(R,'switchStanceAtTakeoff',{get(){return R._sst;},set(v){R._sst=v;}}); R._sst=false;
 const _takeoff=takeoff; // record stance at takeoff for FS/BS naming
