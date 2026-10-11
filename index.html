@@ -220,7 +220,7 @@ body.touch .card .grid.tc{display:grid}
       <div class="presents"><img src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349"><span>presents</span></div>
       <h1>Thursday <em>Yacht Club</em></h1>
       <div class="tagline">No Risk, No Story.</div>
-      <p>The boat's doing 21 mph on a 65 ft line. Cut out wide, then edge hard back at the wake. Hold <kbd>Space</kbd> on the way in to load the line, and let go at the lip to pop. Clear both wakes for the bonus. Spins are set at the lip: tap a direction for a 180, hold it to wind up more. Keep pushing to tuck and spin faster, push back to open up and slow it. Land straight, or catch an edge and drink half the lake.</p>
+      <p>The boat's doing 21 mph on a 65 ft line. Cut out wide, then edge hard back at the wake. Hold <kbd>Space</kbd> on the way in to load the line, and let go at the lip to pop. Clear both wakes for the bonus. Spins are set at the lip: tap a direction for a 180, hold it to wind up more. Keep pushing to tuck and spin faster, push back to open up and slow it. Hold a grab to tweak it, but let go before you land. Land straight, or catch an edge and drink half the lake.</p>
       <p>DJ Poorly P is driving, and his SoundCloud is playing through the tower speakers. Skip a tune with <kbd>N</kbd> or the DJ panel.</p>
       <div class="grid kb">
         <div><span><kbd>←</kbd> <kbd>→</kbd></span><span>heelside / toeside edge · spin off the lip (tap for 180, hold to wind up more)</span></div>
@@ -1377,6 +1377,8 @@ function plateGeo(){
 
 // ---------- rider ----------
 const rider=new THREE.Group(); scene.add(rider);
+// the board, plates and fins hang off their own group, so a grab can turn the board against the body (placeBoard)
+const board=new THREE.Group(); rider.add(board);
 const RM={
   skin:mat(0xd9a37e,{roughness:0.55}),
   vest:mat(0xe63946,{roughness:0.8,map:noiseTex(64,210,60,70,28,3)}),
@@ -1393,17 +1395,17 @@ const RM={
 const P={}; // parts
 {
   const bg=boardGeos();
-  rider.add(new THREE.Mesh(bg.top,RM.boardTop),new THREE.Mesh(bg.base,RM.boardBase),new THREE.Mesh(bg.rail,RM.boardRail));
+  board.add(new THREE.Mesh(bg.top,RM.boardTop),new THREE.Mesh(bg.base,RM.boardBase),new THREE.Mesh(bg.rail,RM.boardRail));
   const paintBoard=()=>{ paintBoardTop(RM.boardTop.map.image); paintBoardBase(RM.boardBase.map.image); RM.boardTop.map.needsUpdate=RM.boardBase.map.needsUpdate=true; };
   paintBoard(); if(!lobsterOk())LOBSTER_IMG.addEventListener('load',paintBoard);
-  for(const z of [0.585,-0.585]){ const fin=new THREE.Mesh(finGeo(z),RM.boardRail); fin.position.set(0,boardRocker(z)+0.001,z); fin.rotation.x=-Math.atan(2*BOARD.rocker*z/BOARD.halfL**2); rider.add(fin); }
+  for(const z of [0.585,-0.585]){ const fin=new THREE.Mesh(finGeo(z),RM.boardRail); fin.position.set(0,boardRocker(z)+0.001,z); fin.rotation.x=-Math.atan(2*BOARD.rocker*z/BOARD.halfL**2); board.add(fin); }
   // binding plates under the boots; the skinned model stands its soles on them (setupRig)
   P.bindings=[]; const plate=plateGeo();
   for(const z of [0.26,-0.26]){
     const deck=boardDeckY(z), pl=new THREE.Mesh(plate,[RM.plate,RM.plateEdge]); pl.position.set(0,deck-0.001,z);
-    pl.rotation.set(-Math.atan(2*BOARD.rocker*z/BOARD.halfL**2),(z>0?1:-1)*12*DEG,0,'YXZ'); rider.add(pl);
-    const b=new THREE.Mesh(new THREE.BoxGeometry(0.30,0.1,0.24),RM.bind);b.position.set(0,0.09,z);b.rotation.y=(z>0?1:-1)*12*DEG;rider.add(b);
-    const liner=new THREE.Mesh(new THREE.BoxGeometry(0.24,0.05,0.16),RM.accent);liner.position.set(0,0.165,z);liner.rotation.y=b.rotation.y;rider.add(liner);
+    pl.rotation.set(-Math.atan(2*BOARD.rocker*z/BOARD.halfL**2),(z>0?1:-1)*12*DEG,0,'YXZ'); board.add(pl);
+    const b=new THREE.Mesh(new THREE.BoxGeometry(0.30,0.1,0.24),RM.bind);b.position.set(0,0.09,z);b.rotation.y=(z>0?1:-1)*12*DEG;board.add(b);
+    const liner=new THREE.Mesh(new THREE.BoxGeometry(0.24,0.05,0.16),RM.accent);liner.position.set(0,0.165,z);liner.rotation.y=b.rotation.y;board.add(liner);
     P.bindings.push(b,liner);
   }
   P.pelvis=new THREE.Mesh(new THREE.CylinderGeometry(0.135,0.125,0.2,14),RM.shorts); rider.add(P.pelvis);
@@ -1426,7 +1428,7 @@ const handle=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.36,8),mat(0
 const ropeSegs=[]; {const m=mat(0xe8e4d8,{roughness:0.9});for(let i=0;i<16;i++){const s=new THREE.Mesh(new THREE.CylinderGeometry(0.011,0.011,1,5),m);scene.add(s);ropeSegs.push(s);}}
 
 // joints, all in rider space: board along z (nose +z), chest facing -x, feet locked in the bindings
-const J={hips:V3(),hipF:V3(),hipB:V3(),kneeF:V3(),kneeB:V3(),footF:V3(0,0.07,0.26),footB:V3(0,0.07,-0.26),sh:V3(),shF:V3(),shB:V3(),elF:V3(),elB:V3(),handF:V3(),handB:V3(),head:V3(),C:V3(),torsoDir:V3(),axis:V3(),handle:V3(),handleAxis:V3(),look:V3(),headUp:V3(0,1,0),headLeft:V3(0,0,1),poleF:V3(),poleB:V3(),kneePoleF:V3(),kneePoleB:V3(),ropeH:V3(0,0,1),phi:0,holdF:1,holdB:1};
+const J={hips:V3(),hipF:V3(),hipB:V3(),kneeF:V3(),kneeB:V3(),footF:V3(0,0.07,0.26),footB:V3(0,0.07,-0.26),sh:V3(),shF:V3(),shB:V3(),elF:V3(),elB:V3(),handF:V3(),handB:V3(),head:V3(),C:V3(),torsoDir:V3(),axis:V3(),handle:V3(),handleAxis:V3(),look:V3(),headUp:V3(0,1,0),headLeft:V3(0,0,1),poleF:V3(),poleB:V3(),kneePoleF:V3(),kneePoleB:V3(),ropeH:V3(0,0,1),phi:0,holdF:1,holdB:1,boardQ:new THREE.Quaternion(),grabPt:V3()};
 const FACING=-1; // regular stance: chest faces local -x
 const COM_H=0.9;  // the centre of mass, this far above the board standing: in the air the body turns about it, not the feet
 // the rider's frame (the board) for orientation q: on the water it is the physics point; in the air the centre of mass
@@ -1436,9 +1438,74 @@ function riderOrigin(q,out){ out.copy(R.pos); if(R.state==='air')out.add(_ro.set
 function airQuat(out){ return out.setFromAxisAngle(UP,R.spin*DEG).multiply(R.baseQuat).multiply(_aq2.setFromAxisAngle(_ro.set(1,0,0),R.flip*DEG)).multiply(_aq2.setFromAxisAngle(_ro.set(0,0,1),R.roll*DEG)); }
 const _ro=V3(), _aq2=new THREE.Quaternion();
 let LEG=0.47; const BOARD_C=V3(0,0.07,0); // thigh/shin length and ankle centre; the skinned model swaps in its own
-// where each grab takes hold of the board: indy/tail with the back hand, melon/nose with the front
-const GRAB_PT={Indy:V3(FACING*0.22,0.05,-0.08),Tail:V3(0,0.05,-0.67),Melon:V3(-FACING*0.22,0.05,0.08),Nose:V3(0,0.05,0.67)};
+// where each grab takes hold of the board: indy/tail with the back hand, melon/nose with the front. The indy is caught
+// toward the back binding (never behind it), where the tucked back foot holds the board up near the hand
+const GRAB_PT={Indy:V3(FACING*0.22,0.05,-0.16),Tail:V3(0,0.05,-0.67),Melon:V3(-FACING*0.22,0.05,0.08),Nose:V3(0,0.05,0.67)};
+// A grab runs on a clock while its button is held: the knees come up and the hand reaches the board by GRAB_CATCH, then
+// the tweak comes in, fully by GRAB_FULL. Let go and the clock runs back GRAB_BACK times as fast, so the legs come back
+// under the rider before the hand returns to the handle, the order real riders use. The pose eases along both curves and
+// follows the clock through a soft spring (GRAB_EASE), so nothing starts, stops or turns round with a jolt. Each tweak is how the board turns
+// against the body at full stretch, in degrees in the rider's frame: pitch nose down (+), roll heel edge up (+), shifty
+// with the nose swinging across in front of the chest (-). The boned leg straightens to `straight` of its full length
+// and the other knee tucks to `tuck`. `chest` is where the shoulders turn to reach it, in degrees from square to the toe
+// side toward the nose (+) or the tail (-), so the waist folds forward over the grab rather than arching back.
+const GRAB_CATCH=0.15, GRAB_FULL=0.48, GRAB_BACK=2;
+const GRAB_EASE=0.07;         // seconds: how softly the pose follows the clock
+const GRAB_STYLE={
+  Melon:{front:true, pitch:28, roll:30, yaw:-20, bone:'F', straight:0.93, tuck:0.55, chest:35},
+  Indy: {front:false,pitch:18, roll:-30,yaw:-20, bone:'F', straight:0.93, tuck:0.55, chest:0},
+  Nose: {front:true, pitch:-40,roll:0,  yaw:15,  bone:'B', straight:0.93, tuck:0.5,  chest:45},
+  Tail: {front:false,pitch:35, roll:8,  yaw:-15, bone:'F', straight:0.93, tuck:0.5,  chest:-40},
+};
+const GRAB_CROUCH=1.45;       // knees up for a grab: the board comes to the hand, the chest doesn't go to the board
+const GRAB_FOLD=[1.25,3];     // the most the waist folds toward the grab at the catch and at full tweak, as far as the hand needs
+const GRAB_ARM=0.5;           // grabbing shoulder to grab point the fold aims for, a little inside the arm's reach
+const smootherstep=(a,b,x)=>{ const t=clamp((x-a)/(b-a),0,1); return t*t*t*(t*(6*t-15)+10); }; // eases in and out, no jolt at either end
+const grabReach=t=>smootherstep(0,GRAB_CATCH,t);                                // the hand's way to the board
+const grabTweak=t=>smootherstep(GRAB_CATCH-0.04,GRAB_FULL,t);                    // the tweak as shown, starting as the hand closes
+const grabStretch=t=>clamp((t-GRAB_CATCH)/(GRAB_FULL-GRAB_CATCH),0,1);           // how far into the tweak the clock is (the rules)
+// critically damped follow toward a target, stable at any frame time; o[k] is the value and o[k+'V'] its rate
+function easeTo(o,k,target,time,dt){ const w=2/time, x=w*dt, e=1/(1+x+0.48*x*x+0.235*x*x*x), c=o[k]-target, tmp=(o[k+'V']+w*c)*dt;
+  o[k+'V']=(o[k+'V']-w*tmp)*e; o[k]=target+(c+tmp)*e; }
+// the bindings' ankle points on the board (setupRig moves them onto the model's soles); J.footF/J.footB are where they
+// are in the rider's frame once the board has turned
+const BIND={F:V3(0,0.07,0.26),B:V3(0,0.07,-0.26)};
 const _b=V3(), _pt=V3(), _pd=V3(), _hx=V3(), _hy=V3(), _hm=new THREE.Matrix4(), _hf=V3(), _hd=V3();
+const crouchOf=p=>lerp(p.crouch,GRAB_CROUCH,p.grab.reach);
+// where the hips sit for this crouch: on the line from the board to the centre of mass (p.axis), dropping and sitting
+// back as the knees bend
+function hipsAt(p,out){ const c=crouchOf(p); out.copy(BOARD_C).addScaledVector(p.axis,2*LEG*(0.989-0.426*c)); out.x-=FACING*0.07*c; return out; }
+// The tweak. In the air the body stays on its flight path and the board moves under it. At the full tweak it's turned
+// all the way and placed so the boned leg is nearly straight and the other knee tucked: the hip joints sit 0.11 m either
+// side of the hips, so the hips can be anywhere on a circle round the line between the bindings, and the point taken
+// swings the board up toward the grabbing shoulder. On the way there the board turns and moves in step with the tweak,
+// so its path is as smooth as the tweak itself. Sets the board's group and the feet, the grab point and the board's turn
+// (J.boardQ) in the rider's frame.
+const HIP_Z=V3(0,0,0.11), _bq=new THREE.Quaternion(), _be=new THREE.Euler(), _b1=V3(), _b2=V3(), _b3=V3(), _b4=V3(), _b5=V3(), _b6=V3();
+function grabQuat(name,s,out){ const st=GRAB_STYLE[name]; return out.setFromEuler(_be.set(st.pitch*DEG*s,st.yaw*DEG*s,st.roll*DEG*s,'YXZ')); }
+function placeBoard(p){
+  const gp=p.grab, st=gp.name?GRAB_STYLE[gp.name]:null, s=st?gp.tweak:0;
+  _bq.identity(); _b5.set(0,0,0);
+  if(st&&s!==0){
+    grabQuat(gp.name,1,_bq);
+    const H=hipsAt(p,_b1), full=2*LEG;
+    const LF=(st.bone==='F'?st.straight:st.tuck)*full, LB=(st.bone==='F'?st.tuck:st.straight)*full;
+    const cF=_b2.copy(BIND.F).applyQuaternion(_bq).sub(HIP_Z), cB=_b3.copy(BIND.B).applyQuaternion(_bq).add(HIP_Z);
+    const u=_b4.subVectors(cF,cB), D=u.length(); u.multiplyScalar(1/D);
+    const a=(LB*LB-LF*LF+D*D)/(2*D), r=Math.sqrt(Math.max(0,LB*LB-a*a)); cB.addScaledVector(u,a); // the circle's centre
+    // which way round it: toward where the hips are untweaked (above the board), swung toward the place that would put
+    // the grab at the shoulder, but never most of the way round, so the hips can't swing through the board
+    _b5.subVectors(H,cB); _b5.addScaledVector(u,-_b5.dot(u)); const hl=Math.max(_b5.length(),1e-6); _b5.multiplyScalar(1/hl);
+    cF.copy(GRAB_PT[gp.name]).applyQuaternion(_bq).add(_b6.set(0,-0.42,(st.front?-1:1)*0.19)); cF.addScaledVector(u,-cF.dot(u)).multiplyScalar(1/hl);
+    const pl=cF.length(); if(pl>0.9)cF.multiplyScalar(0.9/pl);
+    cF.add(_b5).normalize();
+    _b5.copy(H).sub(cB).addScaledVector(cF,-r).multiplyScalar(s); // the full tweak's board origin (hips - (centre + r * that way)), in step
+    grabQuat(gp.name,s,_bq);
+  }
+  board.quaternion.copy(_bq); board.position.copy(_b5); J.boardQ.copy(_bq);
+  J.footF.copy(BIND.F).applyQuaternion(_bq).add(_b5); J.footB.copy(BIND.B).applyQuaternion(_bq).add(_b5);
+  if(gp.name)J.grabPt.copy(GRAB_PT[gp.name]).applyQuaternion(_bq).add(_b5);
+}
 // The grip. Riding: chest and shoulders square to the handle, both hands overhand either side of centre, arms at one fixed
 // reach with a slight bend; when the rider hangs back or crouches it's the body that moves, so the handle ends up low in
 // front of the belly. Rotating (spins, flips): the handle is pulled in to the waist on the rope's side and stays there
@@ -1456,7 +1523,7 @@ function handleAt(sh,torso,C,reach,shHalf,out){
 function holdWeight(phi){ const a=phi/DEG; return a>-150?smoothstep(-70,-45,a):smoothstep(-150,-168,a); }
 // where the bar is and where the hands are; never further from a shoulder than the arm can reach
 function placeGrip(p,sh,shF,shB,shHalf,reach,armMax){
-  const torso=J.torsoDir, axis=J.axis, pull=p.pull;
+  const torso=J.torsoDir, axis=J.axis, pull=p.pull, gp=p.grab, gr=gp.name?gp.reach:0, front=gr>0&&GRAB_STYLE[gp.name].front;
   if(p.handleFree){ J.handle.copy(p.handle); J.handleAxis.copy(p.handleAxis); }
   else{
     handleAt(sh,torso,J.C,reach,shHalf,_g1);
@@ -1464,25 +1531,25 @@ function placeGrip(p,sh,shF,shB,shHalf,reach,armMax){
     J.handle.copy(_g1).lerp(_g2,pull);
     _g3.crossVectors(torso,J.ropeH).normalize(); if(_g3.dot(axis)<0)_g3.negate();      // the bar lies square to the rope
     J.handleAxis.copy(axis).lerp(_g3,pull).normalize();
+    // grabbing, the other hand drives the handle low into the front hip, which keeps the boat from pulling them round
+    if(gr>0){ _g2.copy(J.hips).addScaledVector(torso,0.1).addScaledVector(J.C,0.2).addScaledVector(axis,0.1);
+      _g3.crossVectors(p.axis,J.ropeH).normalize(); if(_g3.dot(axis)<0)_g3.negate(); // square to the rope, level with the hips: the folded torso tips it otherwise
+      J.handle.lerp(_g2,gr); J.handleAxis.lerp(_g3,gr).normalize(); }
   }
   J.holdF=p.handleFree?0:1-pull*(1-holdWeight(J.phi)); J.holdB=p.handleFree?0:1-pull*(1-holdWeight(-J.phi));
+  if(gr>0&&!p.handleFree){ if(front)J.holdB=lerp(J.holdB,1,gr); else J.holdF=lerp(J.holdF,1,gr); }
   // a hand off the bar goes out to the side for balance
   _g1.copy(shF).addScaledVector(axis,0.4).addScaledVector(J.C,0.15).addScaledVector(torso,-0.15);
   J.handF.copy(_g1).lerp(_g2.copy(J.handle).addScaledVector(J.handleAxis,GRIP_HALF),J.holdF);
   _g1.copy(shB).addScaledVector(axis,-0.4).addScaledVector(J.C,0.15).addScaledVector(torso,-0.15);
   J.handB.copy(_g1).lerp(_g2.copy(J.handle).addScaledVector(J.handleAxis,-GRIP_HALF),J.holdB);
-  const g=p.grabs, ease=t=>clamp(t,0,1);
-  if(g.Indy>0)J.handB.lerp(GRAB_PT.Indy,ease(g.Indy));
-  if(g.Tail>0)J.handB.lerp(GRAB_PT.Tail,ease(g.Tail));
-  if(g.Melon>0)J.handF.lerp(GRAB_PT.Melon,ease(g.Melon));
-  if(g.Nose>0)J.handF.lerp(GRAB_PT.Nose,ease(g.Nose));
+  if(gr>0)(front?J.handF:J.handB).lerp(J.grabPt,gr); // and the grabbing hand takes the board
   if(p.bail>0){J.handF.copy(J.shF).add(_hd.set(Math.sin(p.bail*11)*0.5,0.2+Math.cos(p.bail*8)*0.4,0.3));J.handB.copy(J.shB).add(_hd.set(Math.cos(p.bail*9)*0.5,0.1+Math.sin(p.bail*10)*0.4,-0.3));}
   for(const [h,s] of [[J.handF,shF],[J.handB,shB]]){ _hd.subVectors(h,s); const L=_hd.length(); if(L>armMax)h.copy(s).addScaledVector(_hd,armMax/L); }
 }
 function solvePose(p){
-  const c=p.crouch, B=p.axis;
-  // Hips sit on the line from the board to the centre of mass (p.axis), dropping and sitting back as the knees bend.
-  J.hips.copy(BOARD_C).addScaledVector(B,2*LEG*(0.989-0.426*c)); J.hips.x-=FACING*0.07*c;
+  const c=crouchOf(p), B=p.axis;
+  hipsAt(p,J.hips);
   // a deep lean would pull the front foot out of its binding: slide the hips back within reach of both feet
   for(let k=0;k<2;k++)for(const s of [1,-1]){
     const foot=s>0?J.footF:J.footB; _pd.copy(foot).sub(J.hips); _pd.z-=s*0.11;
@@ -1496,13 +1563,26 @@ function solvePose(p){
   // the chest turns from sideways toward the rope, no further than a spine can turn, and mostly stays with the hips while
   // rotating so the handle can go round the back; the torso follows the body line, folding a little as the knees bend
   J.ropeH.copy(hDir); J.phi=Math.atan2(hDir.z,FACING*hDir.x); // rider's left is +z while the chest faces -x
-  const psi=clamp(J.phi,-Math.PI/2,Math.PI/2)*p.twist*(1-0.55*p.pull);
+  const gp=p.grab, gr=gp.name?gp.reach:0;
+  const psi=lerp(clamp(J.phi,-Math.PI/2,Math.PI/2)*p.twist*(1-0.55*p.pull),gr>0?GRAB_STYLE[gp.name].chest*DEG:0,gr);
   const C=J.C.set(FACING*Math.cos(psi),0,Math.sin(psi));
   const torsoDir=J.torsoDir.copy(B).addScaledVector(C,0.08+0.22*c);
-  // a grab folds the body at the waist toward the hand's target on the board
-  const g=p.grabs; let gw=0; _pt.set(0,0,0);
-  for(const k in GRAB_PT){ const w=clamp(g[k],0,1); if(w>0){ gw=Math.max(gw,w); _pt.addScaledVector(GRAB_PT[k],w); } }
-  if(gw>0){ _pt.sub(J.hips); _pt.y=0; if(_pt.lengthSq()>1e-4)torsoDir.addScaledVector(_pt.normalize(),1.0*gw); torsoDir.addScaledVector(C,0.3*gw); }
+  // a grab folds the body at the waist toward the board, as far as the grabbing shoulder needs to reach it and no further
+  if(gr>0){
+    _pt.copy(J.grabPt).sub(J.hips); _pt.y=0; _pt.multiplyScalar(1/Math.max(_pt.length(),0.3)); // fades out as it passes under the hips, never flips
+    _hd.copy(torsoDir); const side=GRAB_STYLE[gp.name].front?0.19:-0.19, fMax=lerp(GRAB_FOLD[0],GRAB_FOLD[1],gp.tweak);
+    // fold f: the torso tipped toward the board, and how far the grabbing shoulder is from the grab point then
+    const fold=f=>{ torsoDir.copy(_hd).addScaledVector(_pt,f*gr).addScaledVector(C,0.3*gr).normalize();
+      _hy.crossVectors(torsoDir,C).normalize(); return _hx.copy(J.hips).addScaledVector(torsoDir,0.5).addScaledVector(_hy,side).distanceTo(J.grabPt); };
+    let f=1, d=fold(f);
+    while(d>GRAB_ARM&&f<fMax){ const f2=Math.min(fMax,f+0.1), d2=fold(f2);
+      if(d2<=GRAB_ARM){ f+=(f2-f)*(d-GRAB_ARM)/Math.max(d-d2,1e-6); break; } // where it comes in reach, between the steps
+      f=f2; d=d2; }
+    // the waist eases after the fold it needs (how far and which way) rather than jumping to it
+    _pd.copy(_pt).multiplyScalar(f*gr).addScaledVector(C,0.3*gr);
+    for(const a of ['x','y','z'])easeTo(gp.lean,a,_pd[a],GRAB_EASE,p.dt);
+    torsoDir.copy(_hd).add(gp.lean).normalize();
+  } else { gp.lean.set(0,0,0); gp.lean.xV=gp.lean.yV=gp.lean.zV=0; }
   if(p.bail>0){torsoDir.x+=Math.sin(p.bail*9)*0.6;torsoDir.z+=Math.cos(p.bail*7)*0.6;}
   torsoDir.normalize();
   J.sh.copy(J.hips).addScaledVector(torsoDir,0.5);
@@ -1510,9 +1590,11 @@ function solvePose(p){
   J.shF.copy(J.sh).addScaledVector(axis,0.19); J.shB.copy(J.sh).addScaledVector(axis,-0.19);
   J.head.copy(J.sh).addScaledVector(torsoDir,0.21).addScaledVector(C,0.03);
   placeGrip(p,J.sh,J.shF,J.shB,0.19,p.armReach,0.57);
-  // elbows hang down and a little out
+  // elbows hang down and a little out; an arm reaching for the board takes its elbow out and back, clear of the chest
   const poleF=V3().copy(torsoDir).multiplyScalar(-0.8).addScaledVector(axis,0.45);
   const poleB=V3().copy(torsoDir).multiplyScalar(-0.8).addScaledVector(axis,-0.45);
+  if(gr>0){ const front=GRAB_STYLE[gp.name].front; _pt.copy(axis).multiplyScalar(front?1:-1).addScaledVector(C,-0.6).addScaledVector(torsoDir,-0.2).normalize();
+    (front?poleF:poleB).lerp(_pt,gr); }
   ik2(J.shF,J.handF,0.29,0.28,poleF,J.elF); ik2(J.shB,J.handB,0.29,0.28,poleB,J.elB); J.poleF.copy(poleF); J.poleB.copy(poleB);
   // head turns toward what the rider is watching, as far as a neck allows (about 80° either side of the chest)
   const look=J.look.copy(p.look).sub(J.head).normalize();
@@ -1544,7 +1626,7 @@ function placeParts(){
 const RIG={ready:false,bones:{},rest:{},rd:{},wq:{},wp:{},curl:{},grip:1,wetMats:[]};
 const RX=V3(1,0,0), RY=V3(0,1,0), RZ=V3(0,0,1);
 const _fa=V3(),_fb=V3(),_fc=V3(),_ga=V3(),_gb=V3(),_gc=V3(),_fm1=new THREE.Matrix4(),_fm2=new THREE.Matrix4(),_rq=new THREE.Quaternion(),_rq2=new THREE.Quaternion();
-const _r1=V3(),_r2=V3(),_r3=V3(),_r4=V3(),_r5=V3(),_r6=V3(),_r7=V3(),_r8=V3(),_r9=V3();
+const _r1=V3(),_r2=V3(),_r3=V3(),_r4=V3(),_r5=V3(),_r6=V3(),_r7=V3(),_r8=V3(),_r9=V3(),_rbu=V3();
 // rotation carrying the frame (main axis a1, second axis b1) onto (a2, b2)
 function frameQuat(a1,b1,a2,b2,out){
   _fa.copy(a1).normalize(); _fb.copy(b1).addScaledVector(_fa,-b1.dot(_fa)).normalize(); _fc.crossVectors(_fa,_fb);
@@ -1585,7 +1667,7 @@ function setupRig(gltf){
   // stand the model in the bindings: its own leg length, ankles at sole height on the board, feet centred across it
   const ankleH=info.ankleHeight||0.08, toe=info.toeReach||0.17, heel=info.heelReach||0.06;
   LEG=(R.leg1+R.leg2)/2; BOARD_C.y=boardDeckY(0.26)+BOARD.plate+(info.soleDepth||0.032)+ankleH; // boots' soles on the plates
-  for(const [foot,sz,key] of [[J.footF,1,'toesF'],[J.footB,-1,'toesB']]){
+  for(const [foot,sz,key] of [[BIND.F,1,'toesF'],[BIND.B,-1,'toesB']]){
     R[key]=V3(FACING*Math.cos(12*DEG),0,sz*Math.sin(12*DEG)); // duck stance: front toes angled to the nose, back toes to the tail
     foot.set(0,BOARD_C.y,0.26*sz).addScaledVector(R[key],-(toe-heel)/2);
   }
@@ -1620,6 +1702,17 @@ function wetRider(){
 function setWorld(name,q){ const b=RIG.bones[name]; RIG.wq[name].copy(q); b.quaternion.copy(_rq2.copy(RIG.wq[b.parent.name]).invert().multiply(q)); }
 function fk(name){ const b=RIG.bones[name]; return RIG.wp[name].copy(b.position).applyQuaternion(RIG.wq[b.parent.name]).add(RIG.wp[b.parent.name]); }
 const FINGER_CURL=[60,75,45], THUMB_CURL=[15,30,25]; // degrees each finger joint folds round the handle
+// A forearm turns about 90° either way from the handshake position (pronation, supination) and no further. q is a bone's
+// world rotation; whatever it turns about its own length (axis, in its parent's frame) past `max` is left out.
+const FOREARM_TWIST=90*DEG, _tq=new THREE.Quaternion(), _tq2=new THREE.Quaternion();
+function twistLimit(q,parent,axis,max){
+  _tq.copy(RIG.wq[parent]).invert().multiply(q);                                     // relative to the parent
+  const d=_tq.x*axis.x+_tq.y*axis.y+_tq.z*axis.z, ang=2*Math.atan2(d,_tq.w);
+  const a=Math.atan2(Math.sin(ang),Math.cos(ang)); if(Math.abs(a)<=max)return q;
+  _tq2.set(axis.x*d,axis.y*d,axis.z*d,_tq.w).normalize().invert();                     // undo the twist...
+  _tq.multiply(_tq2).multiply(_tq2.setFromAxisAngle(axis,Math.sign(a)*max));           // ...and put back as much as fits
+  return q.copy(RIG.wq[parent]).multiply(_tq);
+}
 function driveRig(dt){
   const R=RIG, B=R.bones, q=_rq;
   const axis=toM(poseParams.axis,_r1), torso=toM(J.torsoDir,_r2), shL=toM(J.axis,_r4);
@@ -1640,6 +1733,14 @@ function driveRig(dt){
   frameQuat(RZ,RY,look,hUp,q); setWorld('head',q);
   setWorld('clavicle_l',R.wq.spine_03); setWorld('clavicle_r',R.wq.spine_03);
   for(const n of ['pelvis','spine_01','spine_02','spine_03','clavicle_l','clavicle_r','upperarm_l','upperarm_r','thigh_l','thigh_r'])if(n!=='pelvis')fk(n);
+  // the board comes to the hand: if the grab is beyond the arm's reach from the model's own shoulder, the board is pulled
+  // in (feet and all) until it isn't, so the hand never closes on thin air
+  const gp=poseParams.grab;
+  if(gp.name&&gp.reach>0&&!poseParams.rag){
+    const S=_r5.copy(R.wp[GRAB_STYLE[gp.name].front?'upperarm_l':'upperarm_r']).applyQuaternion(R.holder.quaternion);
+    const d=_r6.subVectors(J.grabPt,S), L=d.length(), max=R.reach*0.98;
+    if(L>max){ d.multiplyScalar(-(1-max/L)*gp.reach); board.position.add(d); J.footF.add(d); J.footB.add(d); J.grabPt.add(d); }
+  }
   // legs: knee from a two-bone solve to the ankle in the binding, foot flat on the board
   const up=toM(UP,_r9);
   for(const [s,foot,toes,pz] of [['l',J.footF,R.toesF,0.3],['r',J.footB,R.toesB,-0.15]]){
@@ -1651,7 +1752,8 @@ function driveRig(dt){
     if(kneeFwd.lengthSq()<1e-6)kneeFwd.copy(pole);
     frameQuat(R.rd['thigh_'+s],RZ,_r8.subVectors(K,H),kneeFwd,q); setWorld('thigh_'+s,q); fk('calf_'+s);
     frameQuat(R.rd['calf_'+s],RZ,_r8.subVectors(A,K),kneeFwd,q); setWorld('calf_'+s,q); fk('foot_'+s);
-    frameQuat(R['footFwd_'+s],RY,toM(toes,_r8),up,q); setWorld('foot_'+s,q); setWorld('ball_'+s,q);
+    frameQuat(R['footFwd_'+s],RY,toM(_r8.copy(toes).applyQuaternion(J.boardQ),_r8),toM(_rbu.copy(UP).applyQuaternion(J.boardQ),_rbu),q); // flat on the board, however it's turned
+    setWorld('foot_'+s,q); setWorld('ball_'+s,q);
   }
   // the grip again from the model's real shoulders and its own reach, so the arms keep the same slight bend
   const SL=R.wp.upperarm_l, SR=R.wp.upperarm_r, hq=R.holder.quaternion;
@@ -1666,8 +1768,8 @@ function driveRig(dt){
     const fore=_r3.subVectors(W,E), upper=_r4.subVectors(E,S), flex=_r8.copy(fore).addScaledVector(upper,-fore.dot(upper)/Math.max(upper.lengthSq(),1e-6));
     if(flex.lengthSq()<1e-6)toM(pole,flex).negate();
     frameQuat(R.rd['upperarm_'+s],RZ,upper,flex,q); setWorld('upperarm_'+s,q);
-    frameQuat(R.rd['lowerarm_'+s],R['back_'+s],fore,up,q); setWorld('lowerarm_'+s,q); setWorld('hand_'+s,q);
-    const gv=poseParams.grabs, holding=Math.max(s==='l'?J.holdF:J.holdB, s==='l'?Math.max(gv.Melon,gv.Nose):Math.max(gv.Indy,gv.Tail));
+    frameQuat(R.rd['lowerarm_'+s],R['back_'+s],fore,up,q); twistLimit(q,'upperarm_'+s,R.rd['lowerarm_'+s],FOREARM_TWIST); setWorld('lowerarm_'+s,q); setWorld('hand_'+s,q);
+    const gp=poseParams.grab, onBoard=gp.name&&GRAB_STYLE[gp.name].front===(s==='l')?gp.reach:0, holding=Math.max(s==='l'?J.holdF:J.holdB,onBoard);
     const curl=R.grip*(0.3+0.7*clamp(holding,0,1));
     for(const fn of ['index','middle','ring','pinky','thumb']){ const ang=fn==='thumb'?THUMB_CURL:FINGER_CURL;
       for(let i=1;i<=3;i++) B[fn+'_0'+i+'_'+s].quaternion.setFromAxisAngle(R.curl[fn+'_'+s],ang[i-1]*DEG*curl); }
@@ -1705,10 +1807,11 @@ function ragBoardFrame(){
 }
 function ragStart(fall,vel,reason){
   const g=RAG, I=g.I, L=g.loc, fromAir=R.state==='air';
-  if(J.sh.lengthSq()<1e-6)solvePose(poseParams); // never posed (a headless run): pose it once
+  if(J.sh.lengthSq()<1e-6){ placeBoard(poseParams); solvePose(poseParams); } // never posed (a headless run): pose it once
   // where every particle sits in the rider's frame right now
   L.nose.set(0,0.02,0.68); L.tail.set(0,0.02,-0.68);
   for(const [k,sd,z] of [['toeF',1,0.26],['heelF',-1,0.26],['toeB',1,-0.26],['heelB',-1,-0.26]]) L[k].set(FACING*sd*0.2,0.02,z);
+  board.updateMatrix(); for(const k of ['nose','tail','toeF','heelF','toeB','heelB'])L[k].applyMatrix4(board.matrix); // as tweaked, with the feet
   for(const k of ['footF','footB','kneeF','kneeB','hipF','hipB','shF','shB','head','elF','elB','handF','handB']) L[k].copy(J[k]);
   _ra.subVectors(J.hipF,J.hipB).normalize(); _rb.crossVectors(_ra,poseParams.axis).normalize(); L.pf.copy(J.hips).addScaledVector(_rb,0.12);
   L.cf.copy(J.sh).addScaledVector(J.C,0.13);
@@ -1888,11 +1991,14 @@ const R={
   spin:0, spinVel:0, flip:0, flipVel:0, roll:0, rollVel:0,
   load:0, loading:false, popRequest:false, ropeTaut:true, tension:0, overload:0, popArm:0, popT:0,
   vySurf:0, airT:0, bailT:0, maxH:0, takeoffU:0, takeoffWake:false, takeoffYaw:0,
-  grabs:{Indy:0,Melon:0,Nose:0,Tail:0}, grabHeld:{Indy:false,Melon:false,Nose:false,Tail:false}, grabVis:{Indy:0,Melon:0,Nose:0,Tail:0},
+  grabs:{Indy:0,Melon:0,Nose:0,Tail:0}, grabTop:{Indy:0,Melon:0,Nose:0,Tail:0}, grabHeld:{Indy:false,Melon:false,Nose:false,Tail:false}, grab:{name:null,t:0},
   nrm:V3(0,1,0), fw:V3(0,G,0), crouch:0.3, landComp:0, quat:new THREE.Quaternion(), baseQuat:new THREE.Quaternion(), renderQuat:new THREE.Quaternion(),
   wet:0, L:{spin:0,flip:0,roll:0}, charge:{spin:0,flip:0,roll:0}, chargeDir:{spin:0,flip:0,roll:0}, chargeT:{spin:0,flip:0,roll:0}, shape:0.45, rotPower:1, lastLanding:null,
 };
 const SESSION={score:0,best:0,bestName:'none yet',falls:0};
+// R.grab is the grab in progress and its clock; per grab, R.grabs is the time the hand was on the board this jump and
+// R.grabTop how far its clock got (past GRAB_CATCH it counts, at GRAB_FULL it was tweaked)
+function clearGrabs(){ for(const k in R.grabs){ R.grabs[k]=0; R.grabTop[k]=0; } R.grab.name=null; R.grab.t=0; }
 const _rr=V3(), _fw=V3();
 // The line is a stiff spring that only pulls: it stretches a little under load, goes slack when the rider runs
 // toward the boat, and snaps tight again with a jolt. R.tension is the pull in newtons.
@@ -1909,7 +2015,7 @@ function resetRider(){
   R.state='riding'; R.pos.set(0,0,p.z-Math.sqrt(ROPE_LEN*ROPE_LEN-PYLON_H*PYLON_H)); R.vel.set(0,0,BOAT_SPEED);
   R.steer=0; R.spin=R.flip=R.roll=0; R.spinVel=R.flipVel=R.rollVel=0; R.switchStance=false; R.travelYaw=0; R.boardYaw=0;
   R.load=0; R.loading=false; R.popRequest=false; R.airT=0; R.vySurf=0; R.bailT=0; R.landComp=0; R.tension=0; R.overload=0; R.popArm=0; R.popT=0;
-  for(const k in R.grabs)R.grabs[k]=0;
+  clearGrabs();
   R.renderQuat.identity(); R.baseQuat.identity(); RAG.on=false;
   R.fw.set(0,G,0); poseParams.axis.copy(UP); poseParams.axisVel.set(0,0,0); cam.trauma=0;
 }
@@ -1920,7 +2026,7 @@ function takeoff(vy,popped){
   R.baseQuat.copy(R.renderQuat); R.loading=false; R.load=0; R.popped=!!popped; R.spinArmed=R.steerIn===0;
   for(const k in R.L){ R.L[k]=0; R.charge[k]=0; R.chargeT[k]=0; } R.shape=0.3;
   R.rotPower=clamp(0.55+0.1*vy,0.6,1.15); // a bigger pop leaves more to turn with
-  for(const k in R.grabs)R.grabs[k]=0;
+  clearGrabs();
   if(AC){sprayBurst(R.pos,18,0.6);}
 }
 function stepRider(dt){
@@ -1987,14 +2093,21 @@ function stepRider(dt){
         if(inp!==0 && R.L[k]!==0){ if(Math.sign(inp)===Math.sign(R.L[k]))tuck=true; else open=true; }
       }
     }
-    const grabbing=Object.values(R.grabHeld).some(v=>v);
+    const grabbing=!!R.grab.name;
     R.shape=damp(R.shape, charging?0.5 : tuck?1 : grabbing?0.8 : open?0 : 0.3, 7, dt);
     for(const k of ['spin','flip','roll']){
       const c=ROT[k], vel=R.L[k]/lerp(c.open,c.tight,R.shape); let ang=R[k]+vel*dt;
       if(tLand<0.3){ const err=Math.round(ang/c.period)*c.period-ang; if(Math.abs(err)<ASSIST_MAX)ang+=err*(1-Math.exp(-5*dt)); }
       R[k]=ang; R[k+'Vel']=vel;
     }
-    for(const k in R.grabs){ if(R.grabHeld[k])R.grabs[k]+=dt; else if(R.grabs[k]>0 && R.grabs[k]<0.18)R.grabs[k]=0; }
+    // one grab at a time: its clock runs while the button is held and back (faster) once it's let go; the next grab can
+    // start once the hand is back on the handle
+    const gr=R.grab;
+    if(!gr.name)for(const k in R.grabHeld)if(R.grabHeld[k]){ gr.name=k; break; }
+    if(gr.name){ const k=gr.name;
+      gr.t=R.grabHeld[k]?Math.min(GRAB_FULL,gr.t+dt):gr.t-GRAB_BACK*dt;
+      if(gr.t>=GRAB_CATCH)R.grabs[k]+=dt; R.grabTop[k]=Math.max(R.grabTop[k],gr.t);
+      if(gr.t<=0){ gr.name=null; gr.t=0; } }
     // where the board really is: the body turns about its centre of mass, so a trick swings the board round it
     airQuat(_aq); riderOrigin(_aq,_brd);
     // an invert that comes round short (or long) puts the head or back in before the board
@@ -2017,9 +2130,15 @@ function headFirst(){
   R.lastLanding=null; bail(reason,null,_impact.copy(R.vel));
 }
 const SPIN_PTS={180:150,360:450,540:900,720:1600,900:2600,1080:4000,1260:6000};
-const _ln=V3(), _toe=V3(), _impact=V3();
+const _ln=V3(), _toe=V3(), _impact=V3(), _low=V3(), _lq=new THREE.Quaternion();
 function land(h){
   _impact.copy(R.vel);
+  // a grab still on at touchdown: let go but not quite back is a late release; still tweaked, the board lands crooked and
+  // catches on its low side
+  const grab=R.grab.name, late=!!grab&&R.grab.t>GRAB_CATCH, crooked=!!grab&&grabStretch(R.grab.t)>0.5;
+  if(crooked){ _low.set(0,1,0).applyQuaternion(grabQuat(grab,grabTweak(R.grab.t),_lq)).applyQuaternion(R.quat); _low.y=0;
+    if(_low.lengthSq()<1e-4)_low.set(R.vel.x,0,R.vel.z); _low.normalize(); }
+  R.grab.name=null; R.grab.t=0;
   // speed into the water surface, measured against the wake (it travels with the boat): a downslope landing is soft
   surfaceNormal(R.pos.x,R.pos.z,boatZ,simTime,_ln);
   const vn=Math.max(0,-(R.vel.x*_ln.x+R.vel.y*_ln.y+(R.vel.z-BOAT_SPEED)*_ln.z));
@@ -2044,6 +2163,7 @@ function land(h){
     fall=V3().copy(_toe).multiplyScalar(toeLeads?1:-1); // a toe edge throws you on your face, a heel edge onto your back
   }
   else if(vn>7.5){ fail=inside?'Cased the second wake':'Too much heat into the flats'; fall=V3(R.vel.x,0,R.vel.z).normalize(); }
+  else if(crooked){ fail=`Held the ${grab.toLowerCase()} into the landing`; fall=V3().copy(_low); }
   const halfTurns=Math.round(R.spin/180);
   if(fail){ bail(fail,fall,_impact); return; }
   if(halfTurns%2!==0)R.switchStance=!R.switchStance;
@@ -2055,11 +2175,14 @@ function land(h){
   if(AC)playSplash(clamp(vn/6,0.25,1)*0.9);
   sprayBurst(R.pos,30+vn*6,0.9);
   if(R.airT<0.28 && spinN===0 && flipN===0 && rollN===0)return; // small bump, no callout
-  scoreTrick({spin:spinN,flip:flipN,roll:rollN,spinErr,flipErr,rollErr,vn,inside,halfTurns});
+  scoreTrick({spin:spinN,flip:flipN,roll:rollN,spinErr,flipErr,rollErr,vn,inside,halfTurns,late});
 }
 function scoreTrick(t){
   const parts=[]; let pts=50; const w2w=R.takeoffWake && !t.inside && Math.sign(R.pos.x)===-Math.sign(R.takeoffU||1) && Math.abs(R.pos.x)>1.5;
-  for(const k of ['Melon','Indy','Nose','Tail']){ if(R.grabs[k]>=0.18){parts.push(k);pts+=120+Math.min(300,R.grabs[k]*220);} }
+  // a grab counts once the hand is on the board and pays for every second it stays there; the full tweak pays more
+  let held=0;
+  for(const k of ['Melon','Indy','Nose','Tail']){ if(R.grabTop[k]<GRAB_CATCH)continue;
+    const tweaked=R.grabTop[k]>=GRAB_FULL; parts.push(tweaked?`Tweaked ${k}`:k); pts+=100+300*R.grabs[k]+(tweaked?150:0); held+=R.grabs[k]; }
   const fs=((t.spin>0)!==R.switchStanceAtTakeoff)?'FS':'BS';
   const sAbs=Math.abs(t.spin), sName=sAbs?`${fs} ${sAbs}`:'';
   let rotName='';
@@ -2079,8 +2202,9 @@ function scoreTrick(t){
   const err=Math.max(t.spinErr,t.flipErr,t.rollErr);
   if(err<14){mult*=1.25;sub.push('clean landing ×1.25');} else if(err>32){mult*=0.7;sub.push('sketchy landing ×0.7');}
   if(t.vn>5){mult*=0.85;sub.push('heavy landing ×0.85');}
+  if(t.late){mult*=0.8;sub.push('late release ×0.8');}
   if(R.popped && R.takeoffWake){mult*=1.1;sub.push('popped the lip');}
-  sub.push(`${R.airT.toFixed(2)} s air · ${R.maxH.toFixed(1)} m`);
+  sub.push(`${R.airT.toFixed(2)} s air · ${R.maxH.toFixed(1)} m${held?` · ${held.toFixed(2)} s grabbed`:''}`);
   pts=Math.round(pts*mult/10)*10;
   SESSION.score+=pts; const name=parts.join(' ');
   if(pts>SESSION.best){SESSION.best=pts;SESSION.bestName=name;}
@@ -2089,6 +2213,7 @@ function scoreTrick(t){
 }
 function bail(reason,fall,vel){
   ragStart(fall,vel||R.vel,reason); // the ragdoll takes over from the pose, with the rider's speed and spin
+  R.grab.name=null; R.grab.t=0;
   R.state='bail'; R.bailT=0; R.wet=1; SESSION.falls++; cam.trauma=Math.min(1,cam.trauma+0.6); R.tension=0; R.overload=0;
   sprayBurst(R.pos,40,1.0); if(AC)playSplash(1.0);
   showTrick(reason,'','No Risk, No Story. The boat\'s coming round.',true);
@@ -2099,7 +2224,7 @@ function sprayBurst(p,n,power){n=Math.round(n*2.2);for(let i=0;i<n;i++){const a=
 // ---------- visuals per frame ----------
 const _tiltQ=new THREE.Quaternion(),_yawQ=new THREE.Quaternion(),_tmpQ=new THREE.Quaternion(),_e=new THREE.Euler();
 const handleW=V3(),handleAxisW=V3(),_v=V3(),_v2=V3(),_invQ=new THREE.Quaternion();
-const poseParams={rag:false,crouch:0.3,twist:0.85,pull:0,axis:V3(0,1,0),axisVel:V3(),armReach:0.57*0.96,pylon:V3(),up:V3(0,1,0),look:V3(),handle:V3(),handleAxis:V3(0,0,1),handleFree:false,grabs:R.grabVis,bail:0};
+const poseParams={rag:false,crouch:0.3,twist:0.85,pull:0,axis:V3(0,1,0),axisVel:V3(),armReach:0.57*0.96,pylon:V3(),up:V3(0,1,0),look:V3(),handle:V3(),handleAxis:V3(0,0,1),handleFree:false,grab:{name:null,reach:0,reachV:0,tweak:0,tweakV:0,lean:Object.assign(V3(),{xV:0,yV:0,zV:0})},bail:0,dt:1/60};
 const LEAN_MAX=55*DEG, BODY_W=9, BODY_Z=0.75; // how far a rider can hang off the board, and how quickly the body follows the forces
 function updateRiderVisual(dt){
   rider.position.copy(R.pos);
@@ -2142,12 +2267,23 @@ function updateRiderVisual(dt){
   poseParams.handleFree=R.state==='bail';
   if(R.state==='bail'){ handleW.set(0,waterAt(0,pyl.z-ROPE_LEN*0.96,boatZ,simTime)+0.05,pyl.z-ROPE_LEN*0.96); rider.worldToLocal(poseParams.handle.copy(handleW)); poseParams.handleAxis.set(1,0,0).applyQuaternion(_invQ); }
   // pose
-  for(const k in R.grabVis){ const want=(R.state==='air'&&R.grabHeld[k])?1:0; R.grabVis[k]=damp(R.grabVis[k],want,want?14:10,dt); if(R.grabVis[k]<0.02)R.grabVis[k]=0; }
-  const anyGrab=Object.values(R.grabVis).some(v=>v>0.3);
+  // the grab: how far the hand has got to the board and how far the tweak is in (crouchOf brings the knees up for it).
+  // The pose eases after the clock, a new grab waits for the last to ease out, and a bail lets go at once.
+  const gp=poseParams.grab, live=R.state==='air'?R.grab.name:null;
+  if(R.state==='bail'){ gp.name=null; gp.reach=gp.tweak=gp.reachV=gp.tweakV=0; }
+  else{
+    if(live&&gp.name!==live&&gp.reach<0.01&&gp.tweak<0.01)gp.name=live;
+    const on=!!live&&gp.name===live;
+    // the hand goes back to the handle unhurried; back on the water the board settles flat quickly
+    const reachT=on?grabReach(R.grab.t):0;
+    easeTo(gp,'reach',reachT,reachT<gp.reach?GRAB_EASE*1.8:GRAB_EASE,dt); easeTo(gp,'tweak',on?grabTweak(R.grab.t):0,R.state==='air'?GRAB_EASE:0.03,dt);
+    gp.reach=clamp(gp.reach,0,1); gp.tweak=clamp(gp.tweak,0,1);
+    if(!on&&gp.reach<0.002&&gp.tweak<0.002){ gp.name=null; gp.reach=gp.tweak=gp.reachV=gp.tweakV=0; }
+  }
   let crouchT;
   // legs soak up the wake: they fold as the face shoves the board up, and extend as the surface drops away
   if(R.state==='riding')crouchT=0.42+0.4*R.load+0.55*R.landComp+0.12*Math.abs(R.steer)+clamp((R.fw.y/G-1)*0.25,-0.12,0.3);
-  else if(R.state==='air')crouchT=anyGrab?1.5:0.55+0.75*R.shape; // knees come up as the rider tucks; a grab is a full tuck, board pulled to the hand
+  else if(R.state==='air')crouchT=0.55+0.75*R.shape; // knees come up as the rider tucks
   else crouchT=0.6;
   poseParams.crouch=damp(poseParams.crouch,clamp(crouchT,0,1.6),R.state==='riding'?9:6,dt);
   poseParams.twist=damp(poseParams.twist,R.state==='air'?0.8:0.85,5,dt); // how far the chest turns from sideways to face the handle
@@ -2157,6 +2293,7 @@ function updateRiderVisual(dt){
   poseParams.pull=damp(poseParams.pull,rotating?1:0,rotating?12:4,dt);
   poseParams.bail=R.state==='bail'?R.bailT:0;
   poseParams.rag=R.state==='bail'&&RAG.on;
+  poseParams.dt=dt; placeBoard(poseParams); // the board turns against the body for a grab's tweak, and the feet go with it
   if(poseParams.rag)ragToPose(); else solvePose(poseParams);
   // wet: drying off toward the damp the spray keeps a rider at
   if(R.state!=='bail')R.wet=moveToward(R.wet,R.state==='riding'?0.15:0,dt/14);
@@ -2526,7 +2663,7 @@ function updateHUD(dt){
   if(R.state==='air'){
     const fs=((R.spin>0)!==R.switchStanceAtTakeoff)?'FS':'BS';
     const bits=[`${R.airT.toFixed(1)} s`]; if(Math.abs(R.spin)>20)bits.push(`${fs} ${Math.round(Math.abs(R.spin))}°`); if(Math.abs(R.flip)>20)bits.push(R.flip>0?'front roll':'backroll'); if(Math.abs(R.roll)>20)bits.push(R.roll>0?'front flip':'tantrum');
-    for(const k in R.grabs)if(R.grabs[k]>=0.18)bits.push(k.toLowerCase());
+    for(const k in R.grabTop)if(R.grabTop[k]>=GRAB_CATCH)bits.push((R.grabTop[k]>=GRAB_FULL?'tweaked ':'')+k.toLowerCase());
     el.air.textContent=bits.join(' · ');
   } else if(R.state==='riding'){ el.air.textContent=R.loading?`loading ${Math.round(R.load*100)}%`:(R.switchStance?'riding switch':''); }
   else el.air.textContent='';
