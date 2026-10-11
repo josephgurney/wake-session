@@ -20,6 +20,9 @@ relaxed, tucked (kept pushing) or opened (pushed back), to check what each input
 Then a crash table: scripted crashes followed through the ragdoll for 2.3 s, checking which way the rider goes over,
 how far they slide, how deep the head goes and that they end up floating.
 
+Then a grab table: the popped jump with a grab held for a scripted stretch of the air, checking the callout: a tap
+doesn't count, a catch counts, a full hold is tweaked, letting go late costs points and holding it into the water bails.
+
 The physics constants live at the top of the script in index.html (EDGE_LD, ROPE_K, ABSORB, ...); edit, re-run, compare.
 """
 import argparse
@@ -59,6 +62,19 @@ CRASHES = [
     {"name": "toe edge catch", "trick": {"axis": "spin", "charge": 0.24, "after": "open", "dir": -1}, "reason": "toe edge", "fall": "down"},
     {"name": "short backroll", "trick": {"axis": "flip", "charge": 0.3, "after": "relax"}, "reason": "Under-rotated the backroll", "fall": None},
 ]
+# Popped 6 m jumps with a grab held from `from` to `until` seconds into the air. `until` None never lets go; 'late' lets
+# go 0.12 s before a plain popped 6 m jump lands. The callout (name and its subline) must contain every phrase in `has`
+# and none in `not`, and `ride` is whether the rider should ride away. A bail is followed through the ragdoll (it starts
+# from the tweaked board) and held to the crash targets.
+GRABS = [
+    {"name": "melon tap", "grab": "Melon", "from": 0.2, "until": 0.3, "has": [], "not": ["Melon"], "ride": True},
+    {"name": "melon caught", "grab": "Melon", "from": 0.2, "until": 0.45, "has": ["Melon"], "not": ["Tweaked", "late release"], "ride": True},
+    {"name": "melon tweaked", "grab": "Melon", "from": 0.15, "until": 0.75, "has": ["Tweaked Melon"], "not": ["late release"], "ride": True},
+    {"name": "tail tweaked", "grab": "Tail", "from": 0.15, "until": 0.75, "has": ["Tweaked Tail"], "not": ["late release"], "ride": True},
+    {"name": "melon late release", "grab": "Melon", "from": 0.15, "until": "late", "has": ["Tweaked Melon", "late release"], "not": [], "ride": True},
+    {"name": "melon held in", "grab": "Melon", "from": 0.15, "until": None, "has": ["Held the melon"], "not": [], "ride": False},
+]
+
 CRASH_TARGETS = [("slide", "slide m", 1.5, 6.0), ("stopT", "stops in s", 0.3, 1.2), ("deepHead", "head deepest m", 0.0, 0.6),
                  ("headEnd", "head at 2.3 s m", -0.05, 0.6)]
 
@@ -77,9 +93,11 @@ RUN_JS = """
 (cfg) => {
   physics = function(){}; gatherInput = function(){};
   boatZ = 0; simTime = 0; resetRider();   // same water, same chop, every run
-  const dt = 1/120, traj = [], bail0 = bail;
-  let failReason = null, rot = 0, crash = null;
+  const dt = 1/120, traj = [], bail0 = bail, show0 = showTrick;
+  let failReason = null, rot = 0, crash = null, shown = null;
   bail = (...a) => { failReason = a[0]; bail0(...a); };
+  showTrick = (...a) => { shown = a.slice(0, 3); show0(...a); };   // the last callout: name, points, subline
+  for (const k in R.grabHeld) R.grabHeld[k] = false;
   let t = 0, phase = 'settle', cruiseT = 0, maxT = 0, maxSpeed = 0, takeoff = null, landed = null, result = 'no jump';
   while (t < 30) {
     const d = boatZ - STERN_OFF - R.pos.z, xc = crestX(d);
@@ -98,6 +116,8 @@ RUN_JS = """
         const inp = (R.airT < tr.charge ? 1 : tr.after === 'tuck' ? 1 : tr.after === 'open' ? -1 : 0) * (tr.dir || 1);
         if (tr.axis === 'spin') R.steerIn = inp; else R.flipIn = -inp;   // down arrow: backroll
       }
+      const gb = cfg.grab;
+      if (gb) R.grabHeld[gb.name] = R.state === 'air' && R.airT >= gb.from && (gb.until == null || R.airT < gb.until);
     }
     const was = R.state;
     boatZ += BOAT_SPEED*dt; simTime += dt; stepRider(dt); updateRiderVisual(dt);   // the pose feeds the ragdoll
@@ -125,12 +145,13 @@ RUN_JS = """
     crash = {slide: Math.hypot(R.pos.x - start.x, R.pos.z - start.z), stopT: stopT === null ? 9 : stopT, deepHead,
              headEnd: h.y - waterAt(h.x, h.z, boatZ, simTime), chest};
   }
-  bail = bail0;
+  bail = bail0; showTrick = show0;
+  for (const k in R.grabHeld) R.grabHeld[k] = false;
   const d = boatZ - STERN_OFF - R.pos.z;
   const wake = [];
   for (let u = -7; u <= 7.001; u += 0.05) wake.push([u, wakeH(u, d)]);
   const peak = traj.reduce((m, p) => Math.max(m, p[1]), -9);
-  return {cfg, result, traj, wake, takeoff, landed, farCrest: crestX(d), cruiseT, maxT, rot, failReason, crash,
+  return {cfg, result, traj, wake, takeoff, landed, farCrest: crestX(d), cruiseT, maxT, rot, failReason, crash, shown,
           landingSpeed: R.lastLanding ? R.lastLanding.vn : null,
           speedRatio: maxSpeed/BOAT_SPEED, airT: traj.length ? traj[traj.length-1][2] : 0,
           aboveLip: takeoff ? peak - takeoff.lip : 0};
@@ -179,11 +200,18 @@ def run_bench(three_path=None):
             results.append(page.evaluate(RUN_JS, cfg))
         tricks = [page.evaluate(RUN_JS, {"cut": 6, "mode": "pop", "trick": tr}) for tr in TRICKS]
         crashes = [page.evaluate(RUN_JS, {"cut": 3, "mode": "pop", "trick": c["trick"], "follow": True}) for c in CRASHES]
+        # a late release lets go just before a plain popped 6 m jump would land
+        plain = next(r for r in results if r["cfg"]["mode"] == "pop" and r["cfg"]["cut"] == 6)
+        grabs = []
+        for g in GRABS:
+            until = plain["airT"] - 0.12 if g["until"] == "late" else g["until"]
+            grabs.append(page.evaluate(RUN_JS, {"cut": 6, "mode": "pop", "grab": {"name": g["grab"], "from": g["from"], "until": until},
+                                                "follow": not g["ride"]}))
         browser.close()
     server.shutdown()
     if errors:
         raise SystemExit("page errors:\n" + "\n".join(errors))
-    return results, tricks, crashes
+    return results, tricks, crashes, grabs
 
 
 def report(results):
@@ -247,6 +275,24 @@ def report_crashes(crashes):
     return ok_all
 
 
+def report_grabs(grabs):
+    print(f"\n{'grab (popped 6 m)':<20}{'held s':>12}  result")
+    ok_all = True
+    for spec, r in zip(GRABS, grabs):
+        g = r["cfg"]["grab"]
+        held = f"{g['from']:.2f}-" + ("land" if g["until"] is None else f"{g['until']:.2f}")
+        text = " | ".join(x for x in (r["shown"] or [])[::2] if x)   # the callout's name and subline
+        rode = r["result"] == "landed"
+        ok = rode == spec["ride"] and all(h in text for h in spec["has"]) and not any(n in text for n in spec["not"])
+        c = r["crash"]
+        if c is not None:
+            ok &= all(lo <= c[key] <= hi for key, _, lo, hi in CRASH_TARGETS)
+            text += f"  (slide {c['slide']:.2f} m, stops {c['stopT']:.2f} s, head deepest {c['deepHead']:.2f} m, at end {c['headEnd']:.2f} m)"
+        ok_all &= ok
+        print(f"{spec['name']:<20}{held:>12}  {'PASS' if ok else 'MISS'}  {text or r['result']}")
+    return ok_all
+
+
 def plot(results, out):
     import matplotlib
     matplotlib.use("Agg")
@@ -292,9 +338,10 @@ if __name__ == "__main__":
     ap.add_argument("--three", help=f"an unpacked three.js {THREE_VERSION} package (with build/ and examples/) to use instead of the CDN")
     ap.add_argument("--out", default=str(ROOT / "tools" / "out" / "jump_bench.png"))
     args = ap.parse_args()
-    res, tricks, crashes = run_bench(args.three)
+    res, tricks, crashes, grabs = run_bench(args.three)
     passed = report(res)
     passed &= report_tricks(tricks)
     passed &= report_crashes(crashes)
+    passed &= report_grabs(grabs)
     plot(res, pathlib.Path(args.out))
     raise SystemExit(0 if passed else 1)
