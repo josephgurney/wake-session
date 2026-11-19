@@ -138,6 +138,25 @@ export function checkScenery() {
   return bad;
 }
 
+// Press P through every setting mid-ride: the label, tree density, spray rate, props and far-tree distance must all follow
+/* global onDown, TREE_GEO */
+export function checkQuality() {
+  const bad = [], seen = [];
+  (0, eval)('qualityAuto=true'); setQuality(2);
+  for (let i = 0; i < 4; i++) {
+    onDown('KeyP'); step(0.3);
+    const Q = QUALITY[quality], label = document.getElementById('quality').textContent; seen.push(label);
+    if (!label.includes(Q.name)) bad.push(`label "${label}" for ${Q.name}`);
+    if (trees.some(m => m.count !== Math.round(m.userData.full * Q.trees))) bad.push(`tree density off on ${Q.name}`);
+    if (spray.rate !== Q.spray) bad.push(`spray rate ${spray.rate} on ${Q.name}`);
+    if (props.visible !== Q.props) bad.push(`props ${props.visible} on ${Q.name}`);
+    const far = Q.treeFar, cz = camera.position.z - shore.position.z;
+    if (trees.some(m => (Math.abs(cz - m.userData.zmid) - 225 > far ? 1 : 0) !== m.userData.lod)) bad.push(`tree detail off on ${Q.name}`);
+  }
+  if (!seen[3].includes('auto')) bad.push(`fourth press should return to auto, got "${seen[3]}"`);
+  return { bad, seen };
+}
+
 const RUNS = [{ cut: 3, mode: 'relaxed' }, { cut: 3, mode: 'hold' }, { cut: 3, mode: 'pop' }, { cut: 6, mode: 'hold' }, { cut: 6, mode: 'pop' }];
 export async function bench() {
   const src = await (await fetch('/tools/jump_bench.py?' + Date.now())).text();
@@ -178,4 +197,20 @@ export async function shot(name, w = 1280) {
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
   await fetch(`http://127.0.0.1:8792/${name}.jpg`, { method: 'POST', body: blob });
   return name;
+}
+
+// GPU time per frame (ms), from timer queries: the reflection pass (with the shadow map, which the first render of a
+// frame draws) and the main scene plus post. Unaffected by how busy the CPU is, unlike render().
+export async function gpu(n = 30) {
+  const gl = renderer.getContext(), ext = gl.getExtension('EXT_disjoint_timer_query_webgl2'); if (!ext) return null;
+  const timed = fn => { const q = gl.createQuery(); gl.beginQuery(ext.TIME_ELAPSED_EXT, q); fn(); gl.endQuery(ext.TIME_ELAPSED_EXT); return q; };
+  const qs = [];
+  for (let i = 0; i < n; i++) { renderer.shadowMap.needsUpdate = true; qs.push([timed(() => renderReflection()), timed(() => renderPost())]); }
+  await new Promise(r => setTimeout(r, 0));   // results only arrive after the task that issued them
+  const sum = [0, 0];
+  for (const pair of qs) for (let k = 0; k < 2; k++) {
+    const q = pair[k]; for (let t = 0; t < 400 && !gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE); t++) await new Promise(r => setTimeout(r, 5));
+    sum[k] += gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6; gl.deleteQuery(q);
+  }
+  return { refl: +(sum[0] / n).toFixed(2), main: +(sum[1] / n).toFixed(2), total: +((sum[0] + sum[1]) / n).toFixed(2) };
 }

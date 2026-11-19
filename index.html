@@ -842,9 +842,9 @@ const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP),waterMaterial(1));
 const waterFar=new THREE.Mesh(gridGeometry(9000,9000,1500),waterMaterial(0)); waterFar.frustumCulled=false; waterFar.position.y=-0.02; scene.add(waterFar);
 // quality: 2 high, 1 medium, 0 low. Auto mode steps down when frames run long, back up when there is headroom.
 const QUALITY=[
-  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.5,spray:0.3,props:false},
-  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.75,spray:0.6,props:true},
-  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,spray:1,props:true}];
+  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.3,treeFar:60,treeHide:900,reflTrees:0,spray:0.25,sprayN:4096,props:false},
+  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.55,treeFar:180,treeHide:1200,reflTrees:550,spray:0.6,sprayN:8192,props:true},
+  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,treeFar:350,treeHide:1550,reflTrees:1550,spray:1,sprayN:16384,props:true}];
 const waterGeos={}; let quality=2, qualityAuto=true, frameEMA=1/60, qualityTimer=0;
 function setQuality(q){
   q=clamp(q,0,QUALITY.length-1); quality=q; const Q=QUALITY[q];
@@ -854,7 +854,8 @@ function setQuality(q){
   for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uDetail.value=Q.detail; m.uniforms.uReflOn.value=reflOn?1:0; }
   if(sun.shadow.mapSize.x!==Q.shadow){ sun.shadow.mapSize.set(Q.shadow,Q.shadow); if(sun.shadow.map){sun.shadow.map.dispose(); sun.shadow.map=null;} }
   setTreeDensity(Q.trees);
-  spray.rate=Q.spray; props.visible=Q.props;
+  spray.rate=Q.spray; spray.setSize(Q.sprayN); props.visible=Q.props;
+  const cheap=q===0; if(('BANK_CHEAP' in landMat.defines)!==cheap){ landMat.defines=cheap?{BANK_CHEAP:''}:{}; landMat.needsUpdate=true; }
   renderer.setPixelRatio(Math.min(devicePixelRatio,Q.pr)); resize();
   const q1=document.getElementById('quality'); if(q1)q1.textContent=`quality: ${Q.name}${qualityAuto?' (auto)':''}`;
 }
@@ -889,12 +890,12 @@ function landH(x,z){
 }
 // where the bank meets the water (y = 0) on one side at z, as a distance out from the course
 function waterlineX(side,z){ let ax=SHORE_X-6; while(ax<SHORE_X+120 && landH(side*ax,z)<0) ax+=0.25; return ax; }
-function landGeometry(side){
+function landGeometry(side,m){   // one period of one bank, centred on m*LAND_P
   // finer across the waterline, where the bank's shape changes fastest
   const xs=[]; for(let x=SHORE_X-10;x<SHORE_X+44;x+=2)xs.push(x); for(let x=SHORE_X+44;x<=SHORE_X+640;x+=8)xs.push(x);
-  const sp=8, nx=xs.length, nz=Math.round(LAND_P*SHORE_SPAN/sp)+1;
+  const sp=8, nx=xs.length, nz=Math.round(LAND_P/sp)+1;
   const pos=new Float32Array(nx*nz*3), sh=new Float32Array(nx*nz*3); let k=0;
-  for(let j=0;j<nz;j++){ const z=-LAND_P*SHORE_SPAN/2+j*sp, st=shoreType(side,z);
+  for(let j=0;j<nz;j++){ const z=(m-0.5)*LAND_P+j*sp, st=shoreType(side,z);
     for(let i=0;i<nx;i++){ const ax=xs[i]; pos[k]=side*ax; pos[k+1]=landH(side*ax,z); pos[k+2]=z; sh[k]=st.beach; sh[k+1]=st.rock; sh[k+2]=st.reed; k+=3; } }
   const idx=new Uint32Array((nx-1)*(nz-1)*6); k=0;
   for(let j=0;j<nz-1;j++)for(let i=0;i<nx-1;i++){const a=j*nx+i,b=a+1,c=a+nx,d=c+1; if(side>0){idx[k++]=a;idx[k++]=c;idx[k++]=b;idx[k++]=b;idx[k++]=c;idx[k++]=d;} else {idx[k++]=a;idx[k++]=b;idx[k++]=c;idx[k++]=b;idx[k++]=d;idx[k++]=c;}}
@@ -910,18 +911,22 @@ float vnoise3(vec3 p){ vec3 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
              mix(mix(hash3(i+vec3(0,0,1)),hash3(i+vec3(1,0,1)),f.x),mix(hash3(i+vec3(0,1,1)),hash3(i+vec3(1,1,1)),f.x),f.y),f.z); }
 float bankNoise(vec2 xz, float s){ float a=xz.y*6.2831853/${LAND_P}.0, R=${LAND_P}.0/6.2831853; return vnoise3(vec3(xz.x,cos(a)*R,sin(a)*R)*s); }`;
 const shore=new THREE.Group(); scene.add(shore);
-const landMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.95,metalness:0});
+const landMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.95,metalness:0}); landMat.defines={};
 landMat.onBeforeCompile=sh=>{
   sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute vec3 aShore; varying vec3 vShore; varying vec3 vLPos; varying float vNy;')
     .replace('#include <begin_vertex>','#include <begin_vertex>\nvShore=aShore; vLPos=position; vNy=normal.y;');
   sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\nvarying vec3 vShore; varying vec3 vLPos; varying float vNy; float wetK;\n'+BANK_NOISE_GLSL)
     .replace('#include <color_fragment>',`#include <color_fragment>
       { vec2 p=vLPos.xz; float y=vLPos.y;
-        float n1=bankNoise(p,0.05), n2=bankNoise(p,0.21), fine=bankNoise(p,0.9);
+        #ifdef BANK_CHEAP
+          float n1=bankNoise(p,0.05), n2=fract(n1*3.7), fine=0.5, bare=1.0-n1, moss=n2;   // the low setting: one lookup
+        #else
+          float n1=bankNoise(p,0.05), n2=bankNoise(p,0.21), fine=bankNoise(p,0.9), bare=bankNoise(p,0.024), moss=bankNoise(p,0.13);
+        #endif
         vec3 grass=mix(vec3(0.036,0.062,0.018),vec3(0.062,0.078,0.024),smoothstep(0.35,0.75,n1));
-        grass=mix(grass,vec3(0.07,0.05,0.032),smoothstep(0.66,0.8,bankNoise(p,0.024))*0.85);           // bare earth
+        grass=mix(grass,vec3(0.07,0.05,0.032),smoothstep(0.66,0.8,bare)*0.85);           // bare earth
         vec3 sand=vec3(0.21,0.18,0.12)*(0.85+0.3*n2), mud=vec3(0.05,0.045,0.03), rock=vec3(0.085,0.08,0.07)*(0.55+0.9*n2*fine);
-        rock=mix(rock,vec3(0.035,0.048,0.022),smoothstep(0.5,0.8,bankNoise(p,0.13))*0.65);                // moss and lichen
+        rock=mix(rock,vec3(0.035,0.048,0.022),smoothstep(0.5,0.8,moss)*0.65);                // moss and lichen
         float low=1.0-smoothstep(0.4,1.6,y);                                                             // the strip by the water
         vec3 edge=sand*vShore.x+rock*vShore.y+mix(mud,grass*0.8,0.35)*vShore.z;
         vec3 c=mix(grass,edge,low*(0.55+0.45*smoothstep(0.3,0.6,n2)));
@@ -934,7 +939,8 @@ landMat.onBeforeCompile=sh=>{
     // dry grass and earth hardly mirror anything, even at a low angle; only the wet band does
     .replace('#include <lights_fragment_end>','#include <lights_fragment_end>\nreflectedLight.indirectSpecular*=mix(0.2,1.0,wetK); reflectedLight.directSpecular*=mix(0.35,1.0,wetK);');
 };
-for(const side of [-1,1]){ const m=new THREE.Mesh(landGeometry(side),landMat); shore.add(m); }
+const landParts=[];
+{ const half=(SHORE_SPAN-1)/2; for(const side of [-1,1]) for(let m=-half;m<=half;m++){ const g=new THREE.Mesh(landGeometry(side,m),landMat); g.userData.zmid=m*LAND_P; landParts.push(g); shore.add(g); } }
 // Trees: spruce, pine, a broadleaf (oak-like, and small for the bushes along the forest edge), birch and willow. Each is
 // a trunk and limbs in bark with its foliage on alpha-tested cards, from one atlas painted here at boot. Card normals
 // point out from the crown, so a tree lights as a soft rounded mass, and the vertex colour darkens the inside and the
@@ -1062,7 +1068,7 @@ function treeGeometry(kind,lod,seed){
     for(let l=0;l<levels;l++){ const t=(l+0.5)/levels, y=1.5+t*(H*0.9-1.5), L=(0.4+2.6*Math.pow(1-t,0.95))*(far?1.2:1), rot=rnd()*6.283;
       for(let k=0;k<per;k++){ const a=rot+k/per*6.283+(rnd()-0.5)*0.4, d=V3(Math.cos(a),-0.3-0.15*(1-t),Math.sin(a)).normalize(), side=V3(-Math.sin(a),0,Math.cos(a));
         const c=V3(0,y,0).addScaledVector(d,L*0.5), w=L*(far?0.8:0.62);
-        b.card(c,d,side.clone().applyAxisAngle(d,0.45),L,w,ATLAS_CELL.spruce);                   // lying out from the trunk
+        if(!far) b.card(c,d,side.clone().applyAxisAngle(d,0.45),L,w,ATLAS_CELL.spruce);         // lying out from the trunk
         b.card(c,d,V3().crossVectors(d,side).normalize().negate(),L,w*0.8,ATLAS_CELL.spruce); } }   // and hanging, for the side view
     for(const ay of [V3(1,0,0),V3(0,0,1)]) b.card(V3(0,H*0.93,0),V3(0,1,0),ay,2.2,0.9,ATLAS_CELL.spruce);
     return b.geometry();
@@ -1134,7 +1140,7 @@ treeMat.onBeforeCompile=sh=>{
       #endif
       reflectedLight.directSpecular*=1.0-0.8*vLeaf; reflectedLight.indirectSpecular*=1.0-0.9*vLeaf;`);
 };
-const TREE_CHUNK=450, TREE_FAR={near:350,low:200}, TREE_HIDE=1550;
+const TREE_CHUNK=450;   // how far out the cheaper trees start, and where trees stop, are per quality setting
 const trees=[];
 // Planting: one period of trees, copied along the whole bank, so it repeats exactly when it snaps forward.
 // A noise field gathers them into stands with clearings between; species follow the distance from the water (willow
@@ -1171,8 +1177,10 @@ const trees=[];
     shore.add(mesh); trees.push(mesh); }
 }
 function setTreeDensity(f){ for(const m of trees)m.count=Math.round(m.userData.full*f); }
-// the water's reflection is blurred anyway: draw it with the cheap trees, then put the near ones back
-function treesFar(on){ for(const m of trees) m.geometry=TREE_GEO[m.userData.kind][on?1:m.userData.lod]; }
+// the water's reflection is blurred anyway: draw it with the cheap trees (and on medium only the nearer ones), then put
+// everything back
+function treesFar(on){ const r=QUALITY[quality].reflTrees;
+  for(const m of trees){ m.geometry=TREE_GEO[m.userData.kind][on?1:m.userData.lod]; m.visible=on?m.userData.d<r:m.userData.d<QUALITY[quality].treeHide; } }
 // ---------- props on the banks: rocks, reeds, jetties with boats tied up, a boathouse ----------
 // One period's worth, copied along the whole bank like the trees. Everything but the reeds is one merged mesh; rocks
 // and reeds are instanced. The low quality setting leaves them out.
@@ -1254,12 +1262,14 @@ function buildProps(){
   group.userData={jetties,boathouses:houses}; return group;
 }
 const props=buildProps(); shore.add(props);
-// a chunk far enough down the course (along z) swaps to the cheaper trees, and one beyond the ridge isn't drawn
+// a chunk far enough down the course (along z) swaps to the cheaper trees, and one beyond the ridge isn't drawn (nor
+// is the ground under it)
 function updateTreeLod(){
-  const far=quality===0?TREE_FAR.low:TREE_FAR.near, cz=camera.position.z-shore.position.z;
-  for(const m of trees){ const d=Math.abs(cz-m.userData.zmid)-TREE_CHUNK/2, lod=d>far?1:0;
-    m.visible=d<TREE_HIDE;   // past the nearer ridge, which stands round the camera at 1.5 km, a chunk can't be seen
+  const Q=QUALITY[quality], far=Q.treeFar, hide=Q.treeHide, cz=camera.position.z-shore.position.z;
+  for(const m of trees){ const d=Math.abs(cz-m.userData.zmid)-TREE_CHUNK/2, lod=d>far?1:0; m.userData.d=d;
+    m.visible=d<hide;   // past the nearer ridge (1.5 km) a chunk can't be seen; on the lower settings the haze has the last stretch
     if(lod!==m.userData.lod){ m.userData.lod=lod; m.geometry=TREE_GEO[m.userData.kind][lod]; } }
+  for(const g of landParts) g.visible=Math.abs(cz-g.userData.zmid)-LAND_P/2<hide;   // and the ground with them
 }
 // Far hills: three wooded ridges round the camera, each lying back up its slope so the sun shades it, with a tree-lined
 // crest and a speckle of forest on its face, fading into the haze the further off it is (and more at its foot, where the
@@ -2488,7 +2498,7 @@ function ragToPose(){
 const SPRAY_DROP=0, SPRAY_SHEET=1, SPRAY_MIST=2;
 class Spray{
   constructor(n){
-    this.n=n; this.i=0; this.clock=0; this.rate=1; this.d0=0; this.dn=0;
+    this.n=n; this.size=n; this.i=0; this.clock=0; this.rate=1; this.d0=0; this.dn=0;
     const g=new THREE.InstancedBufferGeometry();
     g.setAttribute('position',new THREE.Float32BufferAttribute([-1,-1,0, 1,-1,0, 1,1,0, -1,1,0],3)); g.setIndex([0,1,2,0,2,3]);
     const attr=(name,size)=>{ const a=new THREE.InstancedBufferAttribute(new Float32Array(n*size),size); a.setUsage(THREE.DynamicDrawUsage); g.setAttribute(name,a); return a; };
@@ -2548,12 +2558,14 @@ class Spray{
   // kind defaults to a droplet, except that the big lumps the old callers throw (a ragdoll slapping down) read as sheets
   emit(x,y,z,vx,vy,vz,life,size,kind){
     if(kind===undefined)kind=size>0.09?SPRAY_SHEET:SPRAY_DROP;
-    const i=this.i; this.i=(i+1)%this.n; if(this.dn===0)this.d0=i; this.dn=Math.min(this.n,this.dn+1);
+    const i=this.i; this.i=(i+1)%this.size; if(this.dn===0)this.d0=i; this.dn=Math.min(this.size,this.dn+1);
     const P=this.aP0.array, Vv=this.aV0.array, T=this.aT.array;
     P[i*3]=x; P[i*3+1]=y; P[i*3+2]=z; Vv[i*3]=vx; Vv[i*3+1]=vy; Vv[i*3+2]=vz;
     T[i*4]=this.clock; T[i*4+1]=life; T[i*4+2]=size; T[i*4+3]=kind;
   }
   // emit about rate*dt particles (times the quality setting), carrying the fraction over in acc[key]
+  // how much of the buffer to use (and draw): smaller on the lower settings
+  setSize(k){ this.size=Math.min(this.n,k); this.geo.instanceCount=this.size; if(this.i>=this.size)this.i=0; this.dn=0; }
   emitRate(acc,key,rate,dt,fn){ acc[key]=(acc[key]||0)+rate*dt*this.rate; while(acc[key]>=1){ acc[key]-=1; fn(); } }
   update(dt){
     this.clock+=dt;
@@ -2561,9 +2573,10 @@ class Spray{
     if(this.dn>0){
       for(const a of [this.aP0,this.aV0,this.aT]){
         const s=a.itemSize; a.clearUpdateRanges();
-        if(this.dn>=this.n) a.addUpdateRange(0,this.n*s);
-        else if(this.d0+this.dn<=this.n) a.addUpdateRange(this.d0*s,this.dn*s);
-        else { a.addUpdateRange(this.d0*s,(this.n-this.d0)*s); a.addUpdateRange(0,(this.d0+this.dn-this.n)*s); }
+        const N=this.size;
+        if(this.dn>=N) a.addUpdateRange(0,N*s);
+        else if(this.d0+this.dn<=N) a.addUpdateRange(this.d0*s,this.dn*s);
+        else { a.addUpdateRange(this.d0*s,(N-this.d0)*s); a.addUpdateRange(0,(this.d0+this.dn-N)*s); }
         a.needsUpdate=true;
       }
       this.dn=0;
