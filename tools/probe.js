@@ -494,9 +494,11 @@ export function checkFoam(n = 4) {
 /* global frame */
 // The game's tick is swapped out too: a hidden pane holds back animation frames, so the one already queued can run later,
 // at the screenshot, and draw over the still.
+// The loop's next request is held (not dropped) while frozen, and unfreezing hands back only that: if the frame already
+// queued when it froze hasn't run yet, the loop never stopped, and queueing another would run two.
 export function freeze(on = true) {
-  if (on && !window.__raf) { window.__raf = window.requestAnimationFrame; window.__tick = window.tick; window.requestAnimationFrame = () => 0; window.tick = () => {}; }
-  else if (!on && window.__raf) { window.requestAnimationFrame = window.__raf; window.tick = window.__tick; delete window.__raf; delete window.__tick; window.requestAnimationFrame(frame); }
+  if (on && !window.__raf) { window.__raf = window.requestAnimationFrame; window.__tick = window.tick; window.__held = null; window.requestAnimationFrame = cb => { window.__held = cb; return 0; }; window.tick = () => {}; }
+  else if (!on && window.__raf) { const held = window.__held; window.requestAnimationFrame = window.__raf; window.tick = window.__tick; delete window.__raf; delete window.__tick; delete window.__held; if (held) window.requestAnimationFrame(held); }
 }
 export function overhead(u = 0, d = 20, h = 14, fov = 54) {
   freeze(true); const sz = boatZ - STERN_OFF, z = sz - d;
@@ -535,4 +537,33 @@ export function checkCrestSpray() {
   if (hi.n < 80) bad.push(`only ${hi.n} crest particles a second on high, want 80+`);
   if (!(lo.n < hi.n * 0.5)) bad.push(`low throws ${lo.n}, high ${hi.n}: low should throw well under half`);
   return bad;
+}
+// freeze(false) must restart the loop only if freeze(true) actually stopped it (the frame already queued when it froze
+// would otherwise carry on as a second loop). Spies on requestAnimationFrame; returns what's wrong.
+export function checkFreeze() {
+  const bad = [], raf = window.requestAnimationFrame; let calls = 0;
+  window.requestAnimationFrame = cb => { calls++; return raf(cb); };
+  try {
+    freeze(true); freeze(false);
+    if (calls !== 0) bad.push(`freeze then unfreeze before the queued frame ran queued ${calls} more loop(s)`);
+    calls = 0; freeze(true); window.requestAnimationFrame(frame); freeze(false);   // the queued frame runs while frozen
+    if (calls !== 1) bad.push(`unfreezing after the loop stopped queued ${calls} frame(s), want 1`);
+  } finally { window.requestAnimationFrame = raf; }
+  return bad;
+}
+// Shimmer: the share (%) of water pixels (the lower part of the frame) that flash and flash back over three 60 fps frames
+// (brighter or darker than both neighbours by more than 40), averaged over n triples, from one of the game's cameras while
+// it rides. Foam that really moves past changes a pixel once; only aliasing flips it and back.
+export function shimmer(mode = 0, n = 6, from = 0.45) {
+  freeze(false); hud(false); view(mode);
+  const gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, rows = Math.floor(H * (1 - from));
+  const grab = () => { renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost(); const px = new Uint8Array(W * rows * 4); gl.readPixels(0, 0, W, rows, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
+  const lum = (p, i) => 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2];
+  let pct = 0;
+  for (let k = 0; k < n; k++) {
+    tick(1 / 60); const a = grab(); tick(1 / 60); const b = grab(); tick(1 / 60); const c = grab(); let f = 0;
+    for (let i = 0; i < a.length; i += 4) { const da = lum(b, i) - lum(a, i), dc = lum(b, i) - lum(c, i); if (Math.abs(da) > 40 && Math.abs(dc) > 40 && Math.sign(da) === Math.sign(dc)) f++; }
+    pct += 100 * f / (a.length / 4) / n;
+  }
+  return +pct.toFixed(3);
 }

@@ -590,37 +590,64 @@ vec3 foamMasks(float u, float d, WakeK k){
   float mid = (1.0 - smoothstep(0.45*hw, hw, au))*smoothstep(0.0, 1.2, d)*(0.4 + 0.6*exp(-d/11.0))*(1.0 - smoothstep(90.0, 170.0, d));
   return vec3(cap, lc, mid);
 }
-// m is how strong a layer is, n its pattern (roughly 0 to 1): strong is solid white, weak only the pattern's peaks
-float cover(float m, float n){ return m < 0.02 ? 0.0 : smoothstep(1.0 - m, 1.2 - m, n); }
-// ridged noise: bright where the noise crosses its middle, so raised to a power it draws veins
+// the pixel's footprint on the lake (dFdx, dFdy of the lake position), set by the water shader before whitewater()
+vec2 fwDx, fwDy;
+// cycles of a pattern with frequencies f (per metre, across and along the course) over one pixel: the larger of its sides
+float cyc(vec2 f){ return max(length(f*fwDx), length(f*fwDy)); }
+// how much of such a pattern a pixel can show: 1 while it's coarse against the pixel, 0 by the time a cycle is under two
+// pixels, where it would only shimmer as the lake streams past
+float detail(vec2 f){ return 1.0 - smoothstep(0.25, 0.6, cyc(f)); }
+// value noise at frequencies f, faded toward its mean as the pixel outgrows it, and not worked out at all once it has
+float vnF(vec2 xz, vec2 f, vec2 off){ float w = detail(f); return w < 0.01 ? 0.5 : mix(0.5, vnoise(xz*f + off), w); }
+// m is how strong a layer is, n its pattern (roughly 0 to 1): strong is solid white, weak only the pattern's peaks. aa is
+// about how much n changes across one pixel: the edge is never sharper than that, so it slides smoothly as the foam
+// streams past instead of crawling a pixel at a time
+float cover(float m, float n, float aa){ if (m < 0.02) return 0.0; float w = max(0.2, aa), c = 1.1 - m; return smoothstep(c - 0.5*w, c + 0.5*w, n); }
+// the share a layer of strength m covers on average: what it settles to as its pattern fades
+float coverAvg(float m){ return smoothstep(0.25, 0.95, m); }
+// ridged noise: bright where the noise crosses its middle, so raised to a power it draws veins (0.29 on average)
 float ridge(vec2 p){ return 1.0 - abs(2.0*vnoise(p) - 1.0); }
-const mat2 FOAM_ROT = mat2(0.8, 0.6, -0.6, 0.8);
-// foam drawn out along the track in veins and wisps (the crest lays it down as it runs out at 9 degrees), wobbled
-float streaks(vec2 xz, float t){
-  vec2 p = vec2(xz.x*2.1, xz.y*0.6);
+// foam drawn out along the track in veins and wisps (the crest lays it down as it runs out at 9 degrees), wobbled; one
+// plain octave on low. Returns (pattern, how much of its detail the pixel shows, how much it changes across the pixel)
+vec3 streaks(vec2 xz, float t){
+  vec2 f = vec2(2.1, 0.6); float w1 = detail(f);
+  if (w1 < 0.01) return vec3(0.29, 0.0, 0.0);
+  vec2 p = xz*f; float a1 = 2.4*cyc(f)*w1;
+  if (uDetail < 0.5) return vec3(mix(0.29, pow(ridge(p + vec2(0.0, t*0.05)), 2.5), w1), w1, a1);
+  float w2 = detail(vec2(4.83, 1.38));
   p += 0.5*vec2(vnoise(p*0.7 + 3.0), vnoise(p*0.7 + 9.0));
-  return pow(ridge(p + vec2(0.0, t*0.05)), 2.5)*0.6 + pow(ridge(FOAM_ROT*p*2.3 + 5.0), 2.5)*0.4;
+  float a = pow(ridge(p + vec2(0.0, t*0.05)), 2.5), b = w2 < 0.01 ? 0.29 : pow(ridge(p*2.3 + 5.0), 2.5);
+  return vec3(0.6*mix(0.29, a, w1) + 0.4*mix(0.29, b, w2), 0.6*w1 + 0.4*w2, 0.6*a1 + 0.4*2.4*cyc(vec2(4.83, 1.38))*w2);
 }
-// (coverage, aeration) at lake position xz
-vec2 whitewater(vec2 xz, float u, float d, WakeK k, float dist){
+// (coverage, aeration) at lake position xz. On low, one noise lookup a layer and no bubbles. Every octave keeps under
+// about 2 cycles a metre along the course: the lake slides 16 cm under the cameras each frame (they ride with the boat),
+// and anything finer along it boils from frame to frame. Real foam rushing past blurs into streaks the same way
+vec2 whitewater(vec2 xz, float u, float d, WakeK k){
   vec3 m = foamMasks(u, d, k);
   float aer = clamp(0.8*m.x + 1.1*m.y + 0.9*m.z, 0.0, 1.0), mm = max(m.x, max(m.y, m.z));
   if (mm < 0.02) return vec2(0.0, aer);
-  // far off the pattern is finer than a pixel: settle toward its average rather than sparkle (and skip the work)
-  float far = smoothstep(60.0, 220.0, dist);
-  if (far > 0.999) return vec2(0.55*mm, aer);
-  // fine bubbles, warped so they don't line up; one octave on low
-  float f = 0.0, bub = 0.5;
-  if (dist < 70.0) { vec2 bp = xz*9.0 + 1.5*vec2(vnoise(xz*1.9), vnoise(xz*1.9 + 5.0)); bub = uDetail > 0.5 ? 0.55*vnoise(bp) + 0.45*vnoise(xz*19.0 - uTime*0.2) : vnoise(bp); }
+  bool hi = uDetail > 0.5;
+  // fine bubbles, warped so they don't line up
+  float wb = hi ? detail(vec2(9.0, 1.8)) : 0.0, bub = 0.5, bubA = 0.0;
+  if (wb > 0.01) { vec2 bp = xz*vec2(9.0, 1.8) + 1.5*vec2(vnoise(xz*vec2(1.9, 0.9)), vnoise(xz*vec2(1.9, 0.9) + 5.0));
+    bub = mix(0.5, 0.55*vnoise(bp) + 0.45*vnF(xz, vec2(19.0, 1.9), vec2(-uTime*0.2)), wb); bubA = cyc(vec2(9.0, 1.8))*wb; }
+  float f = 0.0;
   // the cap: clumps with bubbly holes
-  if (m.x > 0.02) f = max(f, cover(m.x, 0.55*vnoise(vec2(xz.x*2.4, xz.y*0.9) + vec2(0.0, uTime*0.1)) + 0.3*vnoise(xz*5.0 - uTime*0.08) + 0.22*bub));
+  if (m.x > 0.02) { vec2 f1 = vec2(2.4, 0.9); float w = detail(f1), w5 = hi ? detail(vec2(5.0, 1.4)) : 0.0;
+    float n = 0.55*vnF(xz, f1, vec2(0.0, uTime*0.1)) + 0.3*(hi ? vnF(xz, vec2(5.0, 1.4), vec2(-uTime*0.08)) : 0.5) + 0.22*bub;
+    float aa = 1.5*(0.55*cyc(f1)*w + 0.3*cyc(vec2(5.0, 1.4))*w5 + 0.22*bubA);
+    f = max(f, mix(cover(m.x, n, aa), coverAvg(m.x), 1.0 - w)); }
   // lace: streaks, in patches
-  if (m.y > 0.02) { float s = streaks(xz + 3.7, uTime); float pt = vnoise(vec2(xz.x*0.6, xz.y*0.2) + 5.3);
-    f = max(f, cover(m.y, s*(0.45 + 0.7*pt)*(0.6 + 0.6*bub))); }
+  if (m.y > 0.02) { vec3 s = streaks(xz + 3.7, uTime); float pt = hi ? vnF(xz, vec2(0.6, 0.2), vec2(5.3)) : 0.5;
+    float aa = (s.z + 0.4*bubA)*(0.45 + 0.7*pt);
+    f = max(f, mix(cover(m.y, s.x*(0.45 + 0.7*pt)*(0.6 + 0.6*bub), aa), 0.4*coverAvg(m.y), 1.0 - s.y)); }
   // the middle: churn streaked along the track
-  if (m.z > 0.02) { vec2 q = vec2(xz.x*2.0, xz.y*0.4);
-    f = max(f, cover(m.z, 0.4*vnoise(q + vec2(0.0, uTime*0.2)) + 0.25*vnoise(q*2.3 - vec2(uTime*0.1, 0.0)) + 0.38*streaks(xz + 9.1, uTime) + 0.12*bub)); }
-  return vec2(mix(f, 0.55*mm, far), aer);
+  if (m.z > 0.02) { vec2 f1 = vec2(2.0, 0.4), f2 = vec2(4.6, 0.92); float w = detail(f1);
+    float n = 0.4*vnF(xz, f1, vec2(0.0, uTime*0.2)) + 0.12*bub, aa = 1.5*(0.4*cyc(f1)*w + 0.12*bubA);
+    if (hi) { vec3 s = streaks(xz + 9.1, uTime); n += 0.25*vnF(xz, f2, vec2(-uTime*0.1, 0.0)) + 0.38*s.x; aa += 1.5*0.25*cyc(f2)*detail(f2) + 0.38*s.z; }
+    else n += 0.25*0.5 + 0.38*0.29;
+    f = max(f, mix(cover(m.z, n, aa), 0.8*coverAvg(m.z), 1.0 - w)); }
+  return vec2(f, aer);
 }`;
 // The same, line for line, for the physics (tools/probe.js checkWakeGPU() holds them to within a millimetre).
 function wakeTrough(d){ return d<=0?0:0.46*Math.exp(-Math.pow(d/24,1.3)); }
@@ -894,10 +921,11 @@ function waterMaterial(near){
         vec2 ws=wd>0.0 ? wakeSlope(wu,wd,wk,dist) : vec2(0.0);
         // whitewater: how much foam covers this pixel, and how aerated the water under it is. Worked out in branches,
         // the derivatives for its lumps outside them (they're undefined inside a branch)
+        vec2 fdx=dFdx(xz), fdy=dFdy(xz); fwDx=fdx; fwDy=fdy;
         vec2 fa=vec2(0.0);
-        if(wd>0.0 && wd<170.0 && abs(wu)-wk.xc<1.0) fa=whitewater(xz,wu,wd,wk,dist);
+        if(wd>0.0 && wd<170.0 && abs(wu)-wk.xc<1.0) fa=whitewater(xz,wu,wd,wk);
         float foam=fa.x, aer=fa.y;
-        vec2 fdx=dFdx(xz), fdy=dFdy(xz); float fgx=dFdx(foam), fgy=dFdy(foam);
+        float fgx=dFdx(foam), fgy=dFdy(foam);
         vec3 N=normalize(vec3(vN.x-ws.x+(c0-cx)/e*amp, 1.0, vN.z-ws.y+(c0-cz)/e*amp));
         float shadow=1.0;
         #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
