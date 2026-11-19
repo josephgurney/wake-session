@@ -842,9 +842,9 @@ const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP),waterMaterial(1));
 const waterFar=new THREE.Mesh(gridGeometry(9000,9000,1500),waterMaterial(0)); waterFar.frustumCulled=false; waterFar.position.y=-0.02; scene.add(waterFar);
 // quality: 2 high, 1 medium, 0 low. Auto mode steps down when frames run long, back up when there is headroom.
 const QUALITY=[
-  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.5},
-  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.75},
-  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1}];
+  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.5,spray:0.3},
+  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.75,spray:0.6},
+  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,spray:1}];
 const waterGeos={}; let quality=2, qualityAuto=true, frameEMA=1/60, qualityTimer=0;
 function setQuality(q){
   q=clamp(q,0,QUALITY.length-1); quality=q; const Q=QUALITY[q];
@@ -854,6 +854,7 @@ function setQuality(q){
   for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uDetail.value=Q.detail; m.uniforms.uReflOn.value=reflOn?1:0; }
   if(sun.shadow.mapSize.x!==Q.shadow){ sun.shadow.mapSize.set(Q.shadow,Q.shadow); if(sun.shadow.map){sun.shadow.map.dispose(); sun.shadow.map=null;} }
   setTreeDensity(Q.trees);
+  spray.rate=Q.spray;
   renderer.setPixelRatio(Math.min(devicePixelRatio,Q.pr)); resize();
   const q1=document.getElementById('quality'); if(q1)q1.textContent=`quality: ${Q.name}${qualityAuto?' (auto)':''}`;
 }
@@ -2138,40 +2139,133 @@ function ragToPose(){
 }
 
 // ---------- particles ----------
-function softTex(size,inner,outer){const c=document.createElement('canvas');c.width=c.height=size;const x=c.getContext('2d');const g=x.createRadialGradient(size/2,size/2,0,size/2,size/2,size/2);g.addColorStop(0,`rgba(255,255,255,${inner})`);g.addColorStop(0.5,`rgba(255,255,255,${inner*0.55})`);g.addColorStop(1,`rgba(255,255,255,${outer})`);x.fillStyle=g;x.fillRect(0,0,size,size);return new THREE.CanvasTexture(c);}
-const sprayTex=softTex(64,1,0);
+// Spray lives on the GPU. Each particle keeps only where, when and how fast it left the water; the vertex shader works
+// out where it is now (drag sideways, gravity down) and where the water is under it, so a drop that falls back in is
+// gone. Only the slots written since the last frame go up to the GPU. Three kinds: droplets, streaked along their
+// motion; sheets, the torn curtain off an edge; and mist, big, faint and slow, hanging behind the board and the boat.
+// Spray is lit from the sun and glows when the sun is behind it, in HDR so the brightest of it catches the bloom.
+const SPRAY_DROP=0, SPRAY_SHEET=1, SPRAY_MIST=2;
 class Spray{
   constructor(n){
-    this.n=n; this.pos=new Float32Array(n*3); this.vel=new Float32Array(n*3); this.life=new Float32Array(n); this.max=new Float32Array(n); this.size=new Float32Array(n); this.alpha=new Float32Array(n); this.i=0;
-    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(this.pos,3)); g.setAttribute('aSize',new THREE.BufferAttribute(this.size,1)); g.setAttribute('aAlpha',new THREE.BufferAttribute(this.alpha,1));
-    const m=new THREE.ShaderMaterial({transparent:true,depthWrite:false,uniforms:{uScale:{value:innerHeight*0.5},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR}},
-      vertexShader:`attribute float aSize; attribute float aAlpha; varying float vA; varying float vD; uniform float uScale; void main(){ vA=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); vD=-mv.z; gl_PointSize = aSize*uScale/max(1.0,-mv.z); gl_Position=projectionMatrix*mv; }`,
-      fragmentShader:`varying float vA; varying float vD; uniform vec3 uFog; uniform float uFogNear; uniform float uFogFar;
-        void main(){ vec2 pc=gl_PointCoord-0.5; float r=length(pc)*2.0; if(r>1.0)discard;
-          float a=(1.0-r*r)*(1.0-r*r)*vA;
-          float lit=0.5+0.5*clamp(0.6-pc.y*1.8-pc.x*0.7,0.0,1.0);
-          vec3 col=mix(vec3(0.55,0.64,0.74),vec3(1.0,1.0,1.0),lit);
-          col=mix(col,uFog,smoothstep(uFogNear,uFogFar,vD));
-          gl_FragColor=vec4(col,a); }`});
-    this.mesh=new THREE.Points(g,m); this.mesh.frustumCulled=false; scene.add(this.mesh); this.mat=m;
+    this.n=n; this.i=0; this.clock=0; this.rate=1; this.d0=0; this.dn=0;
+    const g=new THREE.InstancedBufferGeometry();
+    g.setAttribute('position',new THREE.Float32BufferAttribute([-1,-1,0, 1,-1,0, 1,1,0, -1,1,0],3)); g.setIndex([0,1,2,0,2,3]);
+    const attr=(name,size)=>{ const a=new THREE.InstancedBufferAttribute(new Float32Array(n*size),size); a.setUsage(THREE.DynamicDrawUsage); g.setAttribute(name,a); return a; };
+    this.aP0=attr('aP0',3); this.aV0=attr('aV0',3); this.aT=attr('aT',4); g.instanceCount=n; this.geo=g;
+    const m=new THREE.ShaderMaterial({transparent:true,depthWrite:false,
+      uniforms:{uClock:{value:0},uWaterT:{value:0},uBoat:{value:V3()},uSun:{value:SUN},uViewH:{value:innerHeight},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR}},
+      vertexShader:`attribute vec3 aP0; attribute vec3 aV0; attribute vec4 aT;
+        uniform float uClock; uniform float uWaterT; uniform vec3 uBoat; uniform vec3 uSun; uniform float uViewH; uniform float uFogNear; uniform float uFogFar;
+        varying vec2 vUv; varying float vA; varying float vKind; varying float vSeed; varying vec3 vLight; varying float vFog;
+        ${WAKE_GLSL}
+        void main(){
+          float tau=uClock-aT.x, life=aT.y, size=aT.z, kind=aT.w;
+          if(life<=0.0 || tau<0.0 || tau>life){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }
+          float k=kind<0.5?0.9:(kind<1.5?1.6:2.5), g=kind<0.5?9.81:6.0, e=exp(-k*tau), age=tau/life;
+          vec3 p=aP0+vec3(aV0.x,0.0,aV0.z)*(1.0-e)/k;
+          vec3 vel=vec3(aV0.x*e,aV0.y-g*tau,aV0.z*e);
+          if(kind<1.5) p.y=aP0.y+aV0.y*tau-0.5*g*tau*tau;
+          else { p.y=aP0.y+aV0.y*(1.0-e)/k+0.18*tau; vel.y=aV0.y*e+0.18; }
+          float h=wake(p.x-uBoat.x,uBoat.z-p.z).x+ambient(p.x,p.z,uWaterT);
+          if(kind<1.5 && tau>0.05 && p.y<h-0.02){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }   // back in the lake
+          float grow=kind<0.5?1.0:(kind<1.5?1.0+0.8*age:1.0+1.5*age);
+          float w=0.5*size*grow;
+          if(kind>1.5) p.y=max(p.y,h+0.45*w);   // mist sits on the water, not through it
+          vec4 mv=viewMatrix*vec4(p,1.0);
+          float pxPerM=projectionMatrix[1][1]*0.5*uViewH/max(0.1,-mv.z);
+          float len=w, alpha=kind<0.5?0.85:(kind<1.5?0.42:0.085);
+          vec2 dir=vec2(0.0,1.0);
+          if(kind<0.5){ vec2 vv=(viewMatrix*vec4(vel,0.0)).xy; float sv=length(vv); if(sv>1e-3)dir=vv/sv; len=w+0.5*0.035*length(vel); }
+          else { float a=fract(sin(dot(aP0.xz,vec2(12.9898,78.233)))*43758.5453)*6.2832; dir=vec2(cos(a),sin(a)); }
+          float px=w*pxPerM;
+          if(px<0.75){ float s=0.75/max(px,1e-4); w*=s; len*=s; alpha/=s*s; }             // never thinner than 1.5 px; fainter instead
+          if(kind>1.5){ float cap=0.09*uViewH/max(px,1e-4); if(cap<1.0){ w*=cap; len*=cap; } } // mist never fills the screen
+          vec2 perp=vec2(dir.y,-dir.x);   // (perp, dir) right-handed, so the quad faces the camera
+          mv.xy+=dir*position.y*len+perp*position.x*w;
+          gl_Position=projectionMatrix*mv;
+          float fade=kind<0.5?min(1.0,(life-tau)*4.0):(kind<1.5?smoothstep(0.0,0.06,tau)*pow(1.0-age,1.2):smoothstep(0.0,0.25,age)*pow(1.0-age,1.5));
+          vA=alpha*fade; vUv=position.xy; vKind=kind; vSeed=fract(aP0.x*3.17+aP0.z*1.31);
+          vec3 V=normalize(cameraPosition-p);
+          float back=pow(max(dot(-V,uSun),0.0),6.0);
+          vLight=vec3(0.55,0.63,0.72)+vec3(1.0,0.94,0.84)*(0.45+2.0*back);
+          if(kind>1.5) vLight*=0.9;
+          vFog=smoothstep(uFogNear,uFogFar,-mv.z);
+        }`,
+      fragmentShader:`uniform vec3 uFog; varying vec2 vUv; varying float vA; varying float vKind; varying float vSeed; varying vec3 vLight; varying float vFog;
+        ${NOISE_GLSL}
+        void main(){
+          float r=length(vUv); if(r>1.0)discard;
+          float a;
+          if(vKind<0.5){ float q=1.0-r*r; a=q*q; }
+          else if(vKind<1.5){ float n=vnoise(vUv*2.6+vSeed*37.0)+0.5*vnoise(vUv*6.1-vSeed*11.0); a=smoothstep(1.0,0.25,r)*smoothstep(0.55,1.05,n+0.45*(1.0-r)); }
+          else { a=pow(smoothstep(1.0,0.0,r),1.5)*(0.55+0.45*vnoise(vUv*1.7+vSeed*23.0)); }
+          a*=vA; if(a<0.003)discard;
+          gl_FragColor=vec4(mix(vLight,uFog,vFog),a);
+        }`});
+    this.mesh=new THREE.Mesh(g,m); this.mesh.frustumCulled=false; scene.add(this.mesh); this.mat=m;
   }
-  emit(x,y,z,vx,vy,vz,life,size){const i=this.i;this.i=(i+1)%this.n;this.pos[i*3]=x;this.pos[i*3+1]=y;this.pos[i*3+2]=z;this.vel[i*3]=vx;this.vel[i*3+1]=vy;this.vel[i*3+2]=vz;this.life[i]=life;this.max[i]=life;this.size[i]=size;}
-  update(dt){const p=this.pos,v=this.vel;for(let i=0;i<this.n;i++){if(this.life[i]<=0){this.alpha[i]=0;continue;}this.life[i]-=dt;v[i*3+1]-=G*dt;v[i*3]*=0.985;v[i*3+2]*=0.985;p[i*3]+=v[i*3]*dt;p[i*3+1]+=v[i*3+1]*dt;p[i*3+2]+=v[i*3+2]*dt;const t=this.life[i]/this.max[i];this.alpha[i]=Math.min(1,t*2.5)*clamp(0.16/this.size[i],0.25,0.9);}
-    this.mesh.geometry.attributes.position.needsUpdate=true;this.mesh.geometry.attributes.aAlpha.needsUpdate=true;this.mesh.geometry.attributes.aSize.needsUpdate=true;}
+  // kind defaults to a droplet, except that the big lumps the old callers throw (a ragdoll slapping down) read as sheets
+  emit(x,y,z,vx,vy,vz,life,size,kind){
+    if(kind===undefined)kind=size>0.09?SPRAY_SHEET:SPRAY_DROP;
+    const i=this.i; this.i=(i+1)%this.n; if(this.dn===0)this.d0=i; this.dn=Math.min(this.n,this.dn+1);
+    const P=this.aP0.array, Vv=this.aV0.array, T=this.aT.array;
+    P[i*3]=x; P[i*3+1]=y; P[i*3+2]=z; Vv[i*3]=vx; Vv[i*3+1]=vy; Vv[i*3+2]=vz;
+    T[i*4]=this.clock; T[i*4+1]=life; T[i*4+2]=size; T[i*4+3]=kind;
+  }
+  // emit about rate*dt particles (times the quality setting), carrying the fraction over in acc[key]
+  emitRate(acc,key,rate,dt,fn){ acc[key]=(acc[key]||0)+rate*dt*this.rate; while(acc[key]>=1){ acc[key]-=1; fn(); } }
+  update(dt){
+    this.clock+=dt;
+    const u=this.mat.uniforms; u.uClock.value=this.clock; u.uWaterT.value=simTime; u.uBoat.value.set(0,0,boatZ-STERN_OFF);
+    if(this.dn>0){
+      for(const a of [this.aP0,this.aV0,this.aT]){
+        const s=a.itemSize; a.clearUpdateRanges();
+        if(this.dn>=this.n) a.addUpdateRange(0,this.n*s);
+        else if(this.d0+this.dn<=this.n) a.addUpdateRange(this.d0*s,this.dn*s);
+        else { a.addUpdateRange(this.d0*s,(this.n-this.d0)*s); a.addUpdateRange(0,(this.d0+this.dn-this.n)*s); }
+        a.needsUpdate=true;
+      }
+      this.dn=0;
+    }
+  }
 }
-const spray=new Spray(3000);
-// foam decals left by the board: speckled, normal-blended, stretched along the direction of travel
-function foamTex(){const c=document.createElement('canvas');c.width=c.height=128;const x=c.getContext('2d');const rnd=mulberry32(77);const g=x.createRadialGradient(64,64,0,64,64,64);g.addColorStop(0,'rgba(255,255,255,0.55)');g.addColorStop(0.6,'rgba(255,255,255,0.3)');g.addColorStop(1,'rgba(255,255,255,0)');x.fillStyle=g;x.fillRect(0,0,128,128);x.globalCompositeOperation='destination-out';for(let i=0;i<140;i++){const r=2+rnd()*7;x.fillStyle=`rgba(0,0,0,${0.3+rnd()*0.7})`;x.beginPath();x.arc(rnd()*128,rnd()*128,r,0,Math.PI*2);x.fill();}x.globalCompositeOperation='source-over';for(let i=0;i<60;i++){const r=1+rnd()*3;x.fillStyle=`rgba(255,255,255,${0.4+rnd()*0.6})`;x.beginPath();x.arc(rnd()*128,rnd()*128,r,0,Math.PI*2);x.fill();}const t=new THREE.CanvasTexture(c);return t;}
-const FOAM_N=420;
+const spray=new Spray(16384);
+// Foam the board leaves on the water: lacy streaks stretched along its line, lingering about ten seconds
+function foamTex(){
+  // a white sheet with holes punched through it: what's left between the holes is the lace. The holes are squashed
+  // along the line, since the decal is stretched three times along it
+  const S=256, c=document.createElement('canvas'); c.width=c.height=S; const x=c.getContext('2d'); const rnd=mulberry32(77);
+  x.fillStyle='rgba(255,255,255,0.62)'; x.fillRect(0,0,S,S);
+  x.globalCompositeOperation='destination-out';
+  for(let i=0;i<340;i++){ const r=2.5+Math.pow(rnd(),1.6)*15; x.fillStyle=`rgba(0,0,0,${0.55+0.45*rnd()})`; x.beginPath(); x.ellipse(rnd()*S,rnd()*S,r,r*(0.35+0.25*rnd()),(rnd()-0.5)*0.6,0,7); x.fill(); }
+  x.globalCompositeOperation='source-over';
+  for(let i=0;i<160;i++){ x.fillStyle=`rgba(255,255,255,${0.35+0.5*rnd()})`; x.beginPath(); x.arc(rnd()*S,rnd()*S,0.6+rnd()*1.8,0,7); x.fill(); }
+  x.globalCompositeOperation='destination-in';
+  const g=x.createRadialGradient(S/2,S/2,S*0.12,S/2,S/2,S*0.5); g.addColorStop(0,'rgba(0,0,0,1)'); g.addColorStop(0.55,'rgba(0,0,0,0.7)'); g.addColorStop(1,'rgba(0,0,0,0)');
+  x.fillStyle=g; x.fillRect(0,0,S,S);
+  return new THREE.CanvasTexture(c);
+}
+const FOAM_N=1200, FOAM_LIFE=10;
 const foam=new THREE.InstancedMesh(new THREE.PlaneGeometry(1,1),new THREE.ShaderMaterial({transparent:true,depthWrite:false,uniforms:{uMap:{value:foamTex()}},
   vertexShader:`varying vec2 vUv; varying float vA; void main(){ vUv=uv; vA=instanceColor.r; gl_Position=projectionMatrix*modelViewMatrix*instanceMatrix*vec4(position,1.0); }`,
   fragmentShader:`uniform sampler2D uMap; varying vec2 vUv; varying float vA; void main(){ float a=texture2D(uMap,vUv).a*vA; if(a<0.004)discard; gl_FragColor=vec4(vec3(0.86,0.91,0.95),a); }`}),FOAM_N);
 foam.frustumCulled=false; scene.add(foam);
 const foamData=[]; for(let i=0;i<FOAM_N;i++){foamData.push({x:0,z:0,t:-1,s:1,yaw:0});}
 const _m4=new THREE.Matrix4(),_qFlat=new THREE.Quaternion().setFromAxisAngle(V3(1,0,0),-Math.PI/2),_qYaw=new THREE.Quaternion(),_qD=new THREE.Quaternion(),_col=new THREE.Color(),_sc=V3(),_pp=V3();
-let foamI=0; function dropFoam(x,z,s,yaw){const f=foamData[foamI];foamI=(foamI+1)%FOAM_N;f.x=x;f.z=z;f.t=0;f.s=s;f.yaw=yaw;}
-{ const c=new THREE.Color(0,0,0); for(let i=0;i<FOAM_N;i++)foam.setColorAt(i,c); }
-function updateFoam(dt,t){for(let i=0;i<FOAM_N;i++){const f=foamData[i];if(f.t<0){_m4.makeScale(0,0,0);foam.setMatrixAt(i,_m4);continue;}f.t+=dt;const life=3.2;if(f.t>life){f.t=-1;_m4.makeScale(0,0,0);foam.setMatrixAt(i,_m4);continue;}const k=f.t/life;const sc=f.s*(0.6+1.6*k);const y=waterAt(f.x,f.z,boatZ,t)+0.03;_qYaw.setFromAxisAngle(UP,f.yaw);_qD.copy(_qYaw).multiply(_qFlat);_m4.compose(_pp.set(f.x,y,f.z),_qD,_sc.set(sc*0.7,sc*1.5,1));foam.setMatrixAt(i,_m4);const a=Math.pow(1-k,1.8)*0.42;_col.setRGB(a,a,a);foam.setColorAt(i,_col);}foam.instanceMatrix.needsUpdate=true;if(foam.instanceColor)foam.instanceColor.needsUpdate=true;}
+const _m0=new THREE.Matrix4().makeScale(0,0,0);
+let foamI=0; function dropFoam(x,z,s,yaw){const f=foamData[foamI];foamI=(foamI+1)%FOAM_N;f.x=x;f.z=z;f.t=0;f.s=s*(0.85+0.3*Math.random());f.yaw=yaw+(Math.random()-0.5)*0.3;}
+{ const c=new THREE.Color(0,0,0); for(let i=0;i<FOAM_N;i++){ foam.setColorAt(i,c); foam.setMatrixAt(i,_m0); } }
+function updateFoam(dt,t){
+  for(let i=0;i<FOAM_N;i++){
+    const f=foamData[i]; if(f.t<0)continue;
+    f.t+=dt; if(f.t>FOAM_LIFE){ f.t=-1; foam.setMatrixAt(i,_m0); continue; }
+    const k=f.t/FOAM_LIFE, sc=f.s*(0.7+1.3*Math.sqrt(k)), y=waterAt(f.x,f.z,boatZ,t)+0.03;
+    _qYaw.setFromAxisAngle(UP,f.yaw); _qD.copy(_qYaw).multiply(_qFlat);
+    _m4.compose(_pp.set(f.x,y,f.z),_qD,_sc.set(sc*0.7,sc*2.1,1)); foam.setMatrixAt(i,_m4);
+    const a=Math.pow(1-k,1.3)*0.38; _col.setRGB(a,a,a); foam.setColorAt(i,_col);
+  }
+  foam.instanceMatrix.needsUpdate=true; if(foam.instanceColor)foam.instanceColor.needsUpdate=true;
+}
 
 // ---------- game state ----------
 let boatZ=0, simTime=0, started=false, booted=false, muted=false; // booted: the loading screen has finished
@@ -2409,7 +2503,13 @@ function bail(reason,fall,vel){
   showTrick(reason,'','No Risk, No Story. The boat\'s coming round.',true);
   updateSessionHUD();
 }
-function sprayBurst(p,n,power){n=Math.round(n*2.2);for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,r=Math.random();spray.emit(p.x+Math.cos(a)*r*0.7,p.y+0.05,p.z+Math.sin(a)*r*0.7,Math.cos(a)*r*4.5*power,(1.5+Math.random()*4.5)*power,BOAT_SPEED*0.6+Math.sin(a)*r*4.5*power,0.45+Math.random()*0.6,0.07+Math.random()*0.26);}}
+// a landing or a slam: droplets, a crown of torn sheets thrown out and up, and a puff of mist
+function sprayBurst(p,n,power){
+  const k=spray.rate;
+  for(let i=0,m=Math.round(n*2.2*k);i<m;i++){const a=Math.random()*Math.PI*2,r=Math.random();spray.emit(p.x+Math.cos(a)*r*0.7,p.y+0.05,p.z+Math.sin(a)*r*0.7,Math.cos(a)*r*4.5*power,(1.5+Math.random()*4.5)*power,BOAT_SPEED*0.6+Math.sin(a)*r*4.5*power,0.45+Math.random()*0.6,0.015+Math.random()*0.03,SPRAY_DROP);}
+  for(let i=0,m=Math.round(n*0.5*k);i<m;i++){const a=Math.random()*Math.PI*2,o=(2.5+Math.random()*2)*power;spray.emit(p.x+Math.cos(a)*0.5,p.y+0.05,p.z+Math.sin(a)*0.5,Math.cos(a)*o,(2.5+Math.random()*3)*power,BOAT_SPEED*0.6+Math.sin(a)*o,0.5+Math.random()*0.4,0.2+Math.random()*0.3,SPRAY_SHEET);}
+  for(let i=0,m=Math.round(n*0.15*k);i<m;i++){const a=Math.random()*Math.PI*2;spray.emit(p.x+Math.cos(a)*0.6,p.y+0.3,p.z+Math.sin(a)*0.6,Math.cos(a)*1.2*power,0.6+Math.random()*0.8,BOAT_SPEED*0.5,1.5+Math.random()*1.0,0.8+Math.random()*1.0,SPRAY_MIST);}
+}
 
 // ---------- visuals per frame ----------
 const _tiltQ=new THREE.Quaternion(),_yawQ=new THREE.Quaternion(),_tmpQ=new THREE.Quaternion(),_e=new THREE.Euler();
@@ -2500,21 +2600,23 @@ function updateRiderVisual(dt){
   _v.set(R.pos.x*0.5,0,(R.pos.z+boatZ)*0.5);
   sun.position.copy(_v).addScaledVector(SUN,80); sun.target.position.copy(_v);
 }
-let foamClock=0, sprayClock=0;
+let foamClock=0; const sprayAcc={};
 function updateEffects(dt){
-  // board wash + spray while riding
+  // the board while riding: foam on the water, and spray off the edge that's biting, thrown out of the turn
   if(R.state==='riding'){
-    foamClock+=dt; if(foamClock>0.11){foamClock=0;dropFoam(R.pos.x,R.pos.z,0.7+Math.abs(R.steer)*0.8,R.travelYaw);}
-    const sp=Math.hypot(R.vel.x,R.vel.z); const edge=Math.abs(R.steer);
-    sprayClock+=dt*(40+edge*420)*(sp/BOAT_SPEED);
-    while(sprayClock>1){sprayClock-=1;
-      const yaw=R.boardYaw; const nx=Math.cos(yaw),nz=-Math.sin(yaw); const side=-Math.sign(R.steer||(Math.random()-0.5));
-      const ox=nx*side*0.25,oz=nz*side*0.25;
-      spray.emit(R.pos.x+ox+(Math.random()-0.5)*0.3,R.pos.y+0.05,R.pos.z+oz+(Math.random()-0.5)*0.7, nx*side*(1.5+edge*6)*(0.5+Math.random())+R.vel.x*0.15, 0.5+Math.random()*(1.2+edge*4.2), R.vel.z*0.35+Math.random()*1.5, 0.3+Math.random()*0.5, 0.05+Math.random()*(0.12+edge*0.16));
-    }
+    const sp=Math.hypot(R.vel.x,R.vel.z), edge=Math.abs(R.steer), spd=sp/BOAT_SPEED;
+    foamClock+=dt; if(foamClock>0.06){foamClock=0;dropFoam(R.pos.x,R.pos.z,0.7+edge*0.8,R.travelYaw);}
+    const yaw=R.boardYaw, nx=Math.cos(yaw), nz=-Math.sin(yaw), side=-Math.sign(R.steer||(Math.random()-0.5));
+    const ox=R.pos.x+nx*side*0.25, oz=R.pos.z+nz*side*0.25, y0=R.pos.y+0.05, out=()=>(1.5+edge*6)*(0.5+Math.random());
+    spray.emitRate(sprayAcc,'drop',(120+900*edge)*spd,dt,()=>{ const o=out(); spray.emit(ox+(Math.random()-0.5)*0.3,y0,oz+(Math.random()-0.5)*0.7, nx*side*o+R.vel.x*0.15, 0.5+Math.random()*(1.2+edge*4.2), R.vel.z*0.35+Math.random()*1.5, 0.3+Math.random()*0.5, 0.012+Math.random()*0.02, SPRAY_DROP); });
+    spray.emitRate(sprayAcc,'sheet',(20+160*edge)*spd,dt,()=>{ const o=out()*0.8; spray.emit(ox+(Math.random()-0.5)*0.2,y0,oz+(Math.random()-0.5)*0.5, nx*side*o+R.vel.x*0.15, 0.4+Math.random()*(0.8+edge*3.4), R.vel.z*0.4+Math.random()*1.2, 0.35+Math.random()*0.5, 0.15+Math.random()*0.3*(0.4+edge), SPRAY_SHEET); });
+    spray.emitRate(sprayAcc,'mist',(6+30*edge)*spd,dt,()=>{ spray.emit(ox+(Math.random()-0.5)*0.6,y0+0.2,oz-0.4-Math.random()*0.6, nx*side*(0.4+edge*1.6)*Math.random()+R.vel.x*0.2, 0.3+Math.random()*0.5, R.vel.z*0.55, 1.4+Math.random()*1.2, 0.6+Math.random()*0.8, SPRAY_MIST); });
   }
-  // boat prop wash
-  for(let i=0;i<8;i++)spray.emit((Math.random()-0.5)*1.3,0.0,boatZ-STERN_OFF-0.3-Math.random()*0.8,(Math.random()-0.5)*2.4,1.2+Math.random()*3.4,BOAT_SPEED*0.3+Math.random()*2,0.45+Math.random()*0.5,0.08+Math.random()*0.28);
+  // the boat's prop wash: churn, torn sheets and a mist that hangs over the track
+  const sz=boatZ-STERN_OFF;
+  spray.emitRate(sprayAcc,'washDrop',300,dt,()=>spray.emit((Math.random()-0.5)*1.3,0.0,sz-0.3-Math.random()*0.8,(Math.random()-0.5)*2.4,1.2+Math.random()*3.4,BOAT_SPEED*0.3+Math.random()*2,0.45+Math.random()*0.5,0.015+Math.random()*0.025,SPRAY_DROP));
+  spray.emitRate(sprayAcc,'washSheet',40,dt,()=>spray.emit((Math.random()-0.5)*1.4,0.05,sz-0.4-Math.random()*1.0,(Math.random()-0.5)*2.0,0.8+Math.random()*2.2,BOAT_SPEED*0.35+Math.random()*1.5,0.5+Math.random()*0.5,0.3+Math.random()*0.4,SPRAY_SHEET));
+  spray.emitRate(sprayAcc,'washMist',18,dt,()=>spray.emit((Math.random()-0.5)*1.8,0.3,sz-0.8-Math.random()*1.5,(Math.random()-0.5)*1.0,0.3+Math.random()*0.6,BOAT_SPEED*0.45,2.0+Math.random()*1.5,1.0+Math.random()*1.2,SPRAY_MIST));
   spray.update(dt); updateFoam(dt,simTime);
 }
 function updateBoatVisual(dt){
@@ -2874,10 +2976,10 @@ function updateHUD(dt){
 
 // ---------- main loop ----------
 const _dbs=new THREE.Vector2();
-function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); spray.mat.uniforms.uScale.value=h*0.5;
+function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix();
   renderer.getDrawingBufferSize(_dbs); const bw=Math.max(2,Math.floor(_dbs.x)),bh=Math.max(2,Math.floor(_dbs.y));
   post.sceneRT.setSize(bw,bh); post.bright.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurA.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurB.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2));
-  post.finalMat.uniforms.uRes.value.set(bw,bh); reflRT.setSize(Math.max(2,Math.floor(bw*reflScale)),Math.max(2,Math.floor(bh*reflScale))); }
+  post.finalMat.uniforms.uRes.value.set(bw,bh); spray.mat.uniforms.uViewH.value=bh; reflRT.setSize(Math.max(2,Math.floor(bw*reflScale)),Math.max(2,Math.floor(bh*reflScale))); }
 performance.mark('tyc:built');
 addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2);
 // The loading screen holds the card back until the rider and the crew are in and a few frames have drawn them, so their

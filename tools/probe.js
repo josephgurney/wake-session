@@ -53,6 +53,34 @@ export function jump(side = 1, out = 4) {
   return R.state;
 }
 
+// Checks for the scenery and spray pass (docs/superpowers/plans/2026-11-19-scenery-and-spray.md): each returns the
+// list of what's wrong, empty when it all holds.
+/* global spray, FOAM_N, SPRAY_DROP, SPRAY_SHEET, SPRAY_MIST, setQuality, quality */
+export async function checkSpray() {
+  const bad = [];
+  if (typeof SPRAY_MIST === 'undefined' || SPRAY_DROP !== 0 || SPRAY_SHEET !== 1 || SPRAY_MIST !== 2) bad.push('SPRAY_DROP/SHEET/MIST constants');
+  if (!spray.geo || !spray.geo.attributes.aT || spray.geo.attributes.aT.itemSize !== 4) bad.push('instanced aT (t0, life, size, kind)');
+  if (typeof spray.clock !== 'number') bad.push('spray.clock');
+  if (typeof spray.rate !== 'number') bad.push('spray.rate');
+  if (FOAM_N !== 1200) bad.push(`FOAM_N is ${FOAM_N}, want 1200`);
+  if (!bad.length) {
+    const i = spray.i; spray.emit(1, 2, 3, 4, 5, 6, 0.7, 0.3, SPRAY_MIST);
+    const a = spray.geo.attributes, T = a.aT.array;
+    if (a.aP0.array[i * 3 + 1] !== 2 || a.aV0.array[i * 3 + 2] !== 6) bad.push('emit position/velocity');
+    if (T[i * 4] !== Math.fround(spray.clock) || Math.abs(T[i * 4 + 1] - 0.7) > 1e-6 || Math.abs(T[i * 4 + 2] - 0.3) > 1e-6 || T[i * 4 + 3] !== SPRAY_MIST) bad.push('emit t0/life/size/kind');
+    // pause: the clock holds while Settings is open, and runs again after
+    const c0 = spray.clock; openSettings(); step(0.5); const c1 = spray.clock;
+    settingsEl.close(); await new Promise(r => setTimeout(r, 0)); step(0.5); const c2 = spray.clock;   // 'close' fires as its own task
+    if (c1 !== c0) bad.push('spray clock runs while paused');
+    if (!(c2 > c1 + 0.4)) bad.push('spray clock stuck after unpause');
+    // quality sets the emission rate
+    const q = quality; setQuality(0); const r0 = spray.rate; setQuality(2); const r2 = spray.rate; setQuality(q);
+    if (!(r0 > 0 && r0 < r2 && r2 === 1)) bad.push(`spray.rate low ${r0}, high ${r2}`);
+  }
+  return bad;
+}
+/* global openSettings, settingsEl */
+
 const RUNS = [{ cut: 3, mode: 'relaxed' }, { cut: 3, mode: 'hold' }, { cut: 3, mode: 'pop' }, { cut: 6, mode: 'hold' }, { cut: 6, mode: 'pop' }];
 export async function bench() {
   const src = await (await fetch('/tools/jump_bench.py?' + Date.now())).text();
