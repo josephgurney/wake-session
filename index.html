@@ -720,9 +720,9 @@ function renderReflection(){
   _rQ.x=(Math.sign(_rClip.x)+pm[8])/pm[0]; _rQ.y=(Math.sign(_rClip.y)+pm[9])/pm[5]; _rQ.z=-1; _rQ.w=(1+pm[10])/pm[14];
   _rClip.multiplyScalar(2/_rClip.dot(_rQ));
   pm[2]=_rClip.x; pm[6]=_rClip.y; pm[10]=_rClip.z+1; pm[14]=_rClip.w;
-  waterNear.visible=false; waterFar.visible=false; foam.visible=false;
+  waterNear.visible=false; waterFar.visible=false; foam.visible=false; treesFar(true);
   renderer.setRenderTarget(reflRT); renderer.render(scene,reflCam);
-  waterNear.visible=true; waterFar.visible=true; foam.visible=true;
+  waterNear.visible=true; waterFar.visible=true; foam.visible=true; treesFar(false);
 }
 
 // ---------- water ----------
@@ -866,9 +866,10 @@ function autoQuality(dt){
 }
 
 // ---------- shoreline, trees and far hills ----------
-// The banks sit 76 m either side of the course. Everything on them is periodic in z (period LAND_P) and built three
-// periods long, so the whole group can snap forward by one period as the boat travels and nothing visibly changes.
-const SHORE_X=76, LAND_P=900;
+// The banks sit 76 m either side of the course. Everything on them is periodic in z (period LAND_P) and built SHORE_SPAN
+// periods long, so the whole group can snap forward by one period as the boat travels and nothing visibly changes. Five
+// periods put the far end of the bank at least 1.8 km ahead, behind the nearer ridge, so it never shows.
+const SHORE_X=76, LAND_P=900, SHORE_SPAN=5;
 function landH(x,z){
   const ax=Math.abs(x); const k=2*Math.PI/LAND_P;
   const n=0.5*Math.sin(z*k*3+ax*0.011)+0.3*Math.sin(z*k*11+ax*0.031+1.7)+0.2*Math.sin(z*k*29-ax*0.07+0.4);
@@ -885,60 +886,264 @@ function landColor(y,ax,z,out){
 }
 function landGeometry(side){
   const x0=SHORE_X-10, x1=SHORE_X+640, sp=8;
-  const nx=Math.round((x1-x0)/sp)+1, nz=Math.round(LAND_P*3/sp)+1;
+  const nx=Math.round((x1-x0)/sp)+1, nz=Math.round(LAND_P*SHORE_SPAN/sp)+1;
   const pos=new Float32Array(nx*nz*3), col=new Float32Array(nx*nz*3); let k=0;
   for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){
-    const ax=x0+i*sp, z=-LAND_P*1.5+j*sp; const y=landH(ax,z);
+    const ax=x0+i*sp, z=-LAND_P*SHORE_SPAN/2+j*sp; const y=landH(ax,z);
     pos[k]=side*ax; pos[k+1]=y; pos[k+2]=z; landColor(y,ax,z,_lc); col[k]=_lc.r; col[k+1]=_lc.g; col[k+2]=_lc.b; k+=3;
   }
   const idx=new Uint32Array((nx-1)*(nz-1)*6); k=0;
   for(let j=0;j<nz-1;j++)for(let i=0;i<nx-1;i++){const a=j*nx+i,b=a+1,c=a+nx,d=c+1; if(side>0){idx[k++]=a;idx[k++]=c;idx[k++]=b;idx[k++]=b;idx[k++]=c;idx[k++]=d;} else {idx[k++]=a;idx[k++]=b;idx[k++]=c;idx[k++]=b;idx[k++]=d;idx[k++]=c;}}
   const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('color',new THREE.BufferAttribute(col,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); g.computeVertexNormals(); return g;
 }
-function mergeGeos(parts){
-  for(const p of parts){ if(!p.geo.index){ const n=p.geo.attributes.position.count; const ix=new Uint16Array(n); for(let i=0;i<n;i++)ix[i]=i; p.geo.setIndex(new THREE.BufferAttribute(ix,1)); } }
-  let nv=0,ni=0; for(const p of parts){nv+=p.geo.attributes.position.count; ni+=p.geo.index.count;}
-  const pos=new Float32Array(nv*3), nrm=new Float32Array(nv*3), col=new Float32Array(nv*3), idx=new Uint16Array(ni); let vo=0,io=0;
-  for(const p of parts){ const g=p.geo; const n=g.attributes.position.count; pos.set(g.attributes.position.array,vo*3); nrm.set(g.attributes.normal.array,vo*3); for(let i=0;i<n;i++){col[(vo+i)*3]=p.c[0];col[(vo+i)*3+1]=p.c[1];col[(vo+i)*3+2]=p.c[2];} for(let i=0;i<g.index.count;i++)idx[io+i]=g.index.array[i]+vo; vo+=n; io+=g.index.count; }
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('normal',new THREE.BufferAttribute(nrm,3)); g.setAttribute('color',new THREE.BufferAttribute(col,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); return g;
-}
-function coniferGeometry(){
-  const t=new THREE.CylinderGeometry(0.12,0.2,2.4,6); t.translate(0,1.2,0);
-  const c1=new THREE.ConeGeometry(1.5,3.4,8); c1.translate(0,3.2,0);
-  const c2=new THREE.ConeGeometry(1.15,3.0,8); c2.translate(0,5.2,0);
-  const c3=new THREE.ConeGeometry(0.75,2.6,8); c3.translate(0,7.0,0);
-  return mergeGeos([{geo:t,c:[0.16,0.11,0.07]},{geo:c1,c:[0.045,0.11,0.05]},{geo:c2,c:[0.05,0.125,0.055]},{geo:c3,c:[0.06,0.14,0.06]}]);
-}
-function broadleafGeometry(){
-  const t=new THREE.CylinderGeometry(0.16,0.24,3.0,6); t.translate(0,1.5,0);
-  const k=new THREE.IcosahedronGeometry(2.4,1); k.scale(1,0.8,1); k.translate(0,4.6,0);
-  return mergeGeos([{geo:t,c:[0.18,0.13,0.08]},{geo:k,c:[0.07,0.15,0.045]}]);
-}
 const shore=new THREE.Group(); scene.add(shore);
 const landMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:1,metalness:0});
 for(const side of [-1,1]){ const m=new THREE.Mesh(landGeometry(side),landMat); shore.add(m); }
+// Trees: spruce, pine, a broadleaf (oak-like, and small for the bushes along the forest edge), birch and willow. Each is
+// a trunk and limbs in bark with its foliage on alpha-tested cards, from one atlas painted here at boot. Card normals
+// point out from the crown, so a tree lights as a soft rounded mass, and the vertex colour darkens the inside and the
+// underside of the crown in place of real occlusion. Leaves glow a little with the sun behind them and sway in the
+// wind. Trees are instanced per kind in chunks along each bank, so the ones off-screen aren't drawn, and a chunk far
+// down the course swaps to a cheaper version with fewer, larger cards.
+const ATLAS_W=2048, ATLAS_H=1024, CELL=512;
+const ATLAS_CELL={spruce:0,pine:1,broadleaf:2,birch:3,willow:4,reed:5,bark:7};
+function paintFoliageAtlas(){
+  // colour and coverage are painted on two canvases and put together by hand, so the colour runs on under the
+  // transparent parts and the smaller mip levels don't darken the edges of every leaf
+  const col=document.createElement('canvas'), alp=document.createElement('canvas'); col.width=alp.width=ATLAS_W; col.height=alp.height=ATLAS_H;
+  const C=col.getContext('2d'), A=alp.getContext('2d'); A.fillStyle='#000'; A.fillRect(0,0,ATLAS_W,ATLAS_H);
+  const rnd=mulberry32(9001), TAU=Math.PI*2, hsl=(h,s,l)=>`hsl(${h},${s}%,${l}%)`;
+  const both=(fill,draw)=>{ C.fillStyle=C.strokeStyle=fill; draw(C); A.fillStyle=A.strokeStyle='#fff'; draw(A); };
+  const ell=(x,y,rx,ry,rot,c)=>both(c,X=>{ X.beginPath(); X.ellipse(x,y,rx,ry,rot,0,TAU); X.fill(); });
+  const line=(x0,y0,x1,y1,w,c)=>both(c,X=>{ X.lineWidth=w; X.lineCap='round'; X.beginPath(); X.moveTo(x0,y0); X.lineTo(x1,y1); X.stroke(); });
+  const blade=(x0,y0,x1,y1,w,c)=>both(c,X=>{ const mx=(x0+x1)/2+(x1-x0)*0.15, my=(y0+y1)/2; X.beginPath(); X.moveTo(x0-w/2,y0); X.quadraticCurveTo(mx-w*0.3,my,x1,y1); X.quadraticCurveTo(mx+w*0.3,my,x0+w/2,y0); X.closePath(); X.fill(); });
+  const cell=(i,bg,fn)=>{ const x0=(i%4)*CELL, y0=Math.floor(i/4)*CELL;
+    for(const X of [C,A]){ X.save(); X.beginPath(); X.rect(x0,y0,CELL,CELL); X.clip(); X.translate(x0,y0); }
+    C.fillStyle=bg; C.fillRect(0,0,CELL,CELL); fn(); C.restore(); A.restore(); };
+  // spruce: a frond along the cell, trunk end on the left, drooping a little to the tip; needles on every twig
+  cell(ATLAS_CELL.spruce,hsl(110,30,14),()=>{
+    const pts=[]; for(let i=0;i<=20;i++){ const t=i/20; pts.push([16+t*480,226+t*t*60]); }
+    for(let i=0;i<20;i++) line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1],7-5*i/20,hsl(25,30,16));
+    for(let i=1;i<20;i++){ const t=i/20, [x,y]=pts[i], len=(1-t*0.55)*150*(0.8+0.4*rnd());
+      for(const sd of [-1,1]){ const a=sd*(0.75+0.35*rnd())+0.25, ex=x+Math.cos(a)*len*0.8, ey=y+Math.sin(a)*len*0.8+len*0.15;
+        line(x,y,ex,ey,2.5,hsl(25,25,18)); const n=Math.floor(len/4.5), ang=Math.atan2(ey-y,ex-x);
+        for(let j=0;j<n;j++){ const s=j/n, px=x+(ex-x)*s, py=y+(ey-y)*s;
+          for(const nd of [-1,1]){ const na=ang+nd*(0.8+0.5*rnd()), nl=(11+8*rnd())*(1-s*0.4);
+            line(px,py,px+Math.cos(na)*nl,py+Math.sin(na)*nl,2.3,hsl(105+rnd()*25,30+rnd()*15,13+rnd()*13+s*7)); } } } }
+  });
+  // pine: tufts of long needles in a loose cluster
+  cell(ATLAS_CELL.pine,hsl(105,30,13),()=>{
+    for(let k=0;k<11;k++){ const cx=80+rnd()*350, cy=90+rnd()*330;
+      for(let j=0;j<70;j++){ const a=rnd()*TAU, l=34+rnd()*58; line(cx,cy,cx+Math.cos(a)*l,cy+Math.sin(a)*l*0.85-l*0.15,2.4,hsl(95+rnd()*28,32+rnd()*16,12+rnd()*13)); }
+      ell(cx,cy,9,9,0,hsl(28,30,18)); }
+  });
+  // broadleaf: a round cluster of overlapping leaves, lighter on top where the sun gets in
+  cell(ATLAS_CELL.broadleaf,hsl(100,45,11),()=>{
+    const lobes=[]; for(let i=0;i<6;i++) lobes.push([256+(rnd()-0.5)*230,256+(rnd()-0.5)*210,80+rnd()*85]);   // lobed, not a disc
+    for(let j=0;j<1400;j++){ const L=lobes[j%6], r=Math.sqrt(rnd())*L[2], a=rnd()*TAU, x=L[0]+Math.cos(a)*r, y=L[1]+Math.sin(a)*r*0.9, l=16+rnd()*14;
+      if(Math.hypot(x-256,y-256)>246) continue;
+      ell(x,y,l*0.55,l*0.3,rnd()*Math.PI,hsl(92+rnd()*30,42+rnd()*22,8+rnd()*11+(256-y)/45)); }
+  });
+  // birch: smaller, lighter leaves, more broken at the edge
+  cell(ATLAS_CELL.birch,hsl(85,42,17),()=>{
+    const lobes=[]; for(let i=0;i<7;i++) lobes.push([256+(rnd()-0.5)*250,256+(rnd()-0.5)*250,60+rnd()*70]);
+    for(let j=0;j<1100;j++){ const L=lobes[j%7], r=Math.pow(rnd(),0.6)*L[2], a=rnd()*TAU; if(rnd()<0.3*r/L[2])continue;
+      const x=L[0]+Math.cos(a)*r, y=L[1]+Math.sin(a)*r, l=12+rnd()*9; if(Math.hypot(x-256,y-256)>246) continue; ell(x,y,l*0.5,l*0.36,rnd()*Math.PI,hsl(80+rnd()*26,44+rnd()*16,14+rnd()*14+(256-y)/50)); }
+  });
+  // willow: strands hanging from the top edge, narrow leaves along them
+  cell(ATLAS_CELL.willow,hsl(80,38,19),()=>{
+    for(let s=0;s<30;s++){ let x=14+rnd()*484, y=0; const len=170+rnd()*300, bend=(rnd()-0.5)*5;
+      for(let j=0;j<len;j+=7){ const nx=x+Math.sin(j*0.012+s)*bend*0.4, ny=y+7; line(x,y,nx,ny,1.6,hsl(60,28,26));
+        for(const sd of [-1,1]) if(rnd()<0.7) ell(x+sd*4.5,y+3,6.5,1.9,sd*1.15+(rnd()-0.5)*0.4,hsl(75+rnd()*26,40+rnd()*15,18+rnd()*13));
+        x=nx; y=ny; } }
+  });
+  // reeds: blades from the bottom edge, some gone to straw, a few seed heads
+  cell(ATLAS_CELL.reed,hsl(75,30,28),()=>{
+    for(let s=0;s<80;s++){ const x0=24+rnd()*464, h=230+rnd()*270, lean=(rnd()-0.5)*130, w=5+rnd()*5;
+      blade(x0,CELL+4,x0+lean,CELL-h,w,rnd()<0.22?hsl(45,32,42+rnd()*12):hsl(78+rnd()*22,34,22+rnd()*14));
+      if(rnd()<0.14) ell(x0+lean*0.82,CELL-h*0.86,5,20,Math.atan2(lean,h),hsl(25,40,20)); }
+  });
+  // bark: brown furrowed bark on the left half, birch on the right (white with dark marks)
+  cell(ATLAS_CELL.bark,'#3a2e24',()=>{
+    both('#fff',X=>{ if(X===A) X.fillRect(0,0,CELL,CELL); });
+    for(let j=0;j<500;j++){ const x=rnd()*250, y=rnd()*CELL; line(x,y,x+(rnd()-0.5)*4,y+18+rnd()*40,2+rnd()*3,hsl(25,22,10+rnd()*17)); }
+    C.fillStyle='#d9d5ca'; C.fillRect(262,0,250,CELL);
+    for(let j=0;j<70;j++){ const x=262+rnd()*250, y=rnd()*CELL; ell(x,y,8+rnd()*22,1.5+rnd()*3,0,'#2a2622'); }
+  });
+  const cd=C.getImageData(0,0,ATLAS_W,ATLAS_H).data, ad=A.getImageData(0,0,ATLAS_W,ATLAS_H).data, out=new Uint8Array(ATLAS_W*ATLAS_H*4);
+  for(let y=0;y<ATLAS_H;y++){ const s=(ATLAS_H-1-y)*ATLAS_W*4, d=y*ATLAS_W*4;   // flipped, so v runs up the texture
+    for(let x=0;x<ATLAS_W*4;x+=4){ out[d+x]=cd[s+x]; out[d+x+1]=cd[s+x+1]; out[d+x+2]=cd[s+x+2]; out[d+x+3]=ad[s+x]; } }
+  const t=new THREE.DataTexture(out,ATLAS_W,ATLAS_H,THREE.RGBAFormat);
+  t.colorSpace=THREE.SRGBColorSpace; t.generateMipmaps=true; t.minFilter=THREE.LinearMipmapLinearFilter; t.magFilter=THREE.LinearFilter;
+  t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy()); t.needsUpdate=true; return t;
+}
+const foliageAtlas=paintFoliageAtlas();
+// u, v inside an atlas cell (v up) to texture coordinates, kept off the cell's edges so mips don't bleed between cells
+function atlasUV(cell,u,v){ const m=0.015; u=m+u*(1-2*m); v=m+v*(1-2*m); return [((cell%4)+u)/4, (1-Math.floor(cell/4)+v)/2]; }
+
+// A small mesh builder: positions, normals, atlas uvs, a grey vertex colour for occlusion, and aSway (0 at the base,
+// 1 at the tips; negative on bark, so the shader can tell leaves from wood)
+function treeBuilder(crown){
+  const b={p:[],n:[],uv:[],c:[],s:[],idx:[],crown};
+  b.vert=(P,N,uv,ao,sw)=>{ b.p.push(P.x,P.y,P.z); b.n.push(N.x,N.y,N.z); b.uv.push(uv[0],uv[1]); b.c.push(ao,ao,ao); b.s.push(sw); return b.p.length/3-1; };
+  b.leafAO=P=>{ const r=Math.hypot(P.x-crown.c.x,P.z-crown.c.z)/crown.r, h=clamp((P.y-crown.y0)/(crown.y1-crown.y0),0,1); return clamp(0.12+0.5*Math.min(r,1.1)+0.4*h,0.12,1.0); };
+  b.leafSway=P=>clamp(0.2+0.5*Math.hypot(P.x,P.z)/crown.r+0.3*P.y/crown.y1,0,1);
+  // a card: centre, the axis its u runs along (length L), the axis its v runs along (width W)
+  b.card=(c,ax,ay,L,W,cell)=>{ const k=b.p.length/3;
+    for(const [u,v] of [[0,0],[1,0],[1,1],[0,1]]){
+      const P=c.clone().addScaledVector(ax,(u-0.5)*L).addScaledVector(ay,(v-0.5)*W);
+      const N=P.clone().sub(crown.c).normalize().multiplyScalar(0.75); N.y+=0.35; N.normalize();
+      b.vert(P,N,atlasUV(cell,u,v),b.leafAO(P),b.leafSway(P)); }
+    b.idx.push(k,k+1,k+2,k,k+2,k+3); };
+  // a clump: crossed cards round a point, turned at random
+  b.clump=(c,size,cell,n,rnd)=>{ const a0=rnd()*Math.PI;
+    for(let i=0;i<n;i++){ const a=a0+i*Math.PI/n, tilt=(rnd()-0.5)*0.5;
+      const ax=V3(Math.cos(a),tilt,Math.sin(a)).normalize(), ay=V3(-Math.sin(a)*0.25,1,Math.cos(a)*0.25).normalize();
+      if(n>2 && i===n-1){ ay.set(-Math.sin(a),0,Math.cos(a)); ax.set(Math.cos(a),0.15,Math.sin(a)).normalize(); }   // one lies flat-ish, for the view from above
+      b.card(c,ax,ay,size*(0.9+0.2*rnd()),size*(0.9+0.2*rnd()),cell); } };
+  // a tapered tube of bark from a to b
+  b.limb=(a,bp,r0,r1,sides,birch)=>{ const d=bp.clone().sub(a), len=d.length(); d.normalize();
+    const t1=Math.abs(d.y)<0.9?V3(0,1,0):V3(1,0,0), u=V3().crossVectors(d,t1).normalize(), w=V3().crossVectors(d,u).normalize();
+    const k=b.p.length/3, u0=birch?0.53:0.02, u1=birch?0.98:0.47;
+    for(let ring=0;ring<2;ring++){ const P0=ring?bp:a, r=ring?r1:r0, y=P0.y;
+      for(let i=0;i<=sides;i++){ const t=i/sides*Math.PI*2, N=u.clone().multiplyScalar(Math.cos(t)).addScaledVector(w,Math.sin(t));
+        b.vert(P0.clone().addScaledVector(N,r),N,atlasUV(ATLAS_CELL.bark,u0+(u1-u0)*i/sides,ring?Math.min(1,len/8):0),0.5+0.35*clamp(y/crown.y1,0,1),-0.001-0.25*clamp(y/crown.y1,0,1)); } }
+    for(let i=0;i<sides;i++){ const a0=k+i, a1=k+i+1, b0=k+sides+1+i, b1=b0+1; b.idx.push(a0,b0,a1,a1,b0,b1); } };
+  b.geometry=()=>{ const g=new THREE.BufferGeometry();
+    g.setAttribute('position',new THREE.Float32BufferAttribute(b.p,3)); g.setAttribute('normal',new THREE.Float32BufferAttribute(b.n,3));
+    g.setAttribute('uv',new THREE.Float32BufferAttribute(b.uv,2)); g.setAttribute('color',new THREE.Float32BufferAttribute(b.c,3));
+    g.setAttribute('aSway',new THREE.Float32BufferAttribute(b.s,1)); g.setIndex(b.idx); g.computeBoundingSphere(); return g; };
+  return b;
+}
+const TREE_KINDS=['spruce','pine','broadleaf','birch','willow'];
+// one kind of tree at a level of detail (0 near, 1 far), shaped by seed
+function treeGeometry(kind,lod,seed){
+  const rnd=mulberry32(seed*7919+lod*31+TREE_KINDS.indexOf(kind)*104729), far=lod>0;
+  if(kind==='spruce'){
+    const H=11, b=treeBuilder({c:V3(0,4.5,0),r:2.9,y0:1.2,y1:H});
+    b.limb(V3(0,-0.4,0),V3(0,H*0.96,0),0.24,0.03,far?4:6,false);
+    const levels=far?5:9, per=far?4:6;
+    for(let l=0;l<levels;l++){ const t=(l+0.5)/levels, y=1.5+t*(H*0.9-1.5), L=(0.4+2.6*Math.pow(1-t,0.95))*(far?1.2:1), rot=rnd()*6.283;
+      for(let k=0;k<per;k++){ const a=rot+k/per*6.283+(rnd()-0.5)*0.4, d=V3(Math.cos(a),-0.3-0.15*(1-t),Math.sin(a)).normalize(), side=V3(-Math.sin(a),0,Math.cos(a));
+        const c=V3(0,y,0).addScaledVector(d,L*0.5), w=L*(far?0.8:0.62);
+        b.card(c,d,side.clone().applyAxisAngle(d,0.45),L,w,ATLAS_CELL.spruce);                   // lying out from the trunk
+        b.card(c,d,V3().crossVectors(d,side).normalize().negate(),L,w*0.8,ATLAS_CELL.spruce); } }   // and hanging, for the side view
+    for(const ay of [V3(1,0,0),V3(0,0,1)]) b.card(V3(0,H*0.93,0),V3(0,1,0),ay,2.2,0.9,ATLAS_CELL.spruce);
+    return b.geometry();
+  }
+  if(kind==='pine'){
+    const H=15, b=treeBuilder({c:V3(0,H*0.82,0),r:3.2,y0:H*0.62,y1:H});
+    const lean=V3((rnd()-0.5)*0.8,0,(rnd()-0.5)*0.8), mid=V3(lean.x*0.4,H*0.5,lean.z*0.4), top=V3(lean.x,H*0.97,lean.z);
+    b.limb(V3(0,-0.4,0),mid,0.3,0.2,far?4:6,false); b.limb(mid,top,0.2,0.05,far?4:6,false);
+    const limbs=far?4:7;
+    for(let i=0;i<limbs;i++){ const t=i/limbs, y=H*(0.64+0.28*t), a=rnd()*6.283, L=(2.0+1.4*rnd())*(1-0.4*t);
+      const base=V3(lean.x*y/H,y,lean.z*y/H), end=base.clone().add(V3(Math.cos(a)*L,0.6+0.8*rnd(),Math.sin(a)*L));
+      if(!far) b.limb(base,end,0.09,0.04,4,false);
+      b.clump(end,1.9+0.6*rnd(),ATLAS_CELL.pine,far?2:3,rnd);
+      if(!far) b.clump(base.clone().lerp(end,0.55).add(V3(0,0.3,0)),1.5+0.5*rnd(),ATLAS_CELL.pine,2,rnd); }
+    b.clump(top.clone().add(V3(0,0.2,0)),2.2,ATLAS_CELL.pine,far?2:3,rnd);
+    return b.geometry();
+  }
+  if(kind==='broadleaf'||kind==='birch'){
+    const birch=kind==='birch', H=birch?13:15, cy=H*(birch?0.64:0.6), R=birch?2.4:5.0, Ry=birch?4.0:4.4;
+    const b=treeBuilder({c:V3(0,cy,0),r:R,y0:cy-Ry,y1:cy+Ry});
+    const lean=birch?V3((rnd()-0.5)*1.2,0,(rnd()-0.5)*1.2):V3();
+    const fork=V3(lean.x*0.5,H*(birch?0.5:0.42),lean.z*0.5);
+    b.limb(V3(0,-0.4,0),fork,birch?0.17:0.38,birch?0.12:0.28,far?4:6,birch);
+    const limbs=birch?2:4;
+    for(let i=0;i<limbs;i++){ const a=i/limbs*6.283+rnd(), end=V3(Math.cos(a)*R*0.45+lean.x,cy+(rnd()-0.2)*Ry*0.6,Math.sin(a)*R*0.45+lean.z);
+      b.limb(fork,end,birch?0.1:0.22,birch?0.05:0.1,far?3:5,birch); }
+    const n=far?(birch?5:7):(birch?10:15), size=birch?2.6:4.2;
+    for(let i=0;i<n;i++){ const u=rnd()*6.283, v=Math.acos(1-1.75*rnd()), rr=i<2&&!far?0.35:0.62+0.38*rnd();   // clumps over the upper crown, a couple inside
+      const c=V3(Math.sin(v)*Math.cos(u)*R*rr+lean.x,cy+Math.cos(v)*Ry*rr,Math.sin(v)*Math.sin(u)*R*rr+lean.z);
+      b.clump(c,size*(far?1.3:1)*(0.85+0.3*rnd()),birch?ATLAS_CELL.birch:ATLAS_CELL.broadleaf,far?2:3,rnd); }
+    return b.geometry();
+  }
+  // willow: a short thick trunk, a low dome and a curtain of hanging strands
+  const H=8, cy=H*0.72, R=4.4, b=treeBuilder({c:V3(0,cy,0),r:R,y0:1,y1:H});
+  const lean=V3((rnd()-0.5)*1.4,0,(rnd()-0.5)*1.4), fork=V3(lean.x*0.6,H*0.42,lean.z*0.6);
+  b.limb(V3(0,-0.4,0),fork,0.45,0.3,far?4:6,false);
+  for(let i=0;i<3;i++){ const a=i/3*6.283+rnd(); b.limb(fork,V3(Math.cos(a)*2.4+lean.x,cy+0.6,Math.sin(a)*2.4+lean.z),0.22,0.09,far?3:5,false); }
+  for(let i=0,n=far?4:7;i<n;i++){ const a=rnd()*6.283, r=R*0.55*Math.sqrt(rnd()); b.clump(V3(Math.cos(a)*r+lean.x,cy+0.9+rnd()*0.8,Math.sin(a)*r+lean.z),3.0,ATLAS_CELL.birch,far?2:3,rnd); }
+  for(const ring of far?[R*0.85]:[R*0.92,R*0.62]){ const n=far?9:16, a0=rnd()*6.283;
+    for(let i=0;i<n;i++){ const a=a0+i/n*6.283, L=3.6+1.4*rnd(), top=cy+1.2;
+      const c=V3(Math.cos(a)*ring+lean.x,top-L/2,Math.sin(a)*ring+lean.z);
+      b.card(c,V3(-Math.sin(a),0,Math.cos(a)),V3(Math.cos(a)*0.12,1,Math.sin(a)*0.12).normalize(),1.8,L,ATLAS_CELL.willow); } }
+  return b.geometry();
+}
+const TREE_GEO={}; for(const k of TREE_KINDS)TREE_GEO[k]=[treeGeometry(k,0,1),treeGeometry(k,1,1)];
+const treeUniforms={uTime:{value:0}};
+const treeMat=new THREE.MeshStandardMaterial({map:foliageAtlas,vertexColors:true,alphaTest:0.42,alphaToCoverage:true,side:THREE.DoubleSide,roughness:0.88,metalness:0});
+treeMat.onBeforeCompile=sh=>{
+  sh.uniforms.uTime=treeUniforms.uTime;
+  sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute float aSway; uniform float uTime; varying float vLeaf;')
+    .replace('#include <begin_vertex>',`#include <begin_vertex>
+      vLeaf=step(0.0,aSway);
+      { float s=abs(aSway); s*=s*0.12;
+        vec3 wp0=(modelMatrix*instanceMatrix*vec4(0.0,0.0,0.0,1.0)).xyz;   // the tree's own base, so each tree has its own phase
+        float ph=uTime*1.3+dot(wp0.xz,vec2(0.21,0.17))+transformed.y*0.35;
+        transformed.x+=s*sin(ph); transformed.z+=s*0.6*cos(ph*0.83+1.7); }`);
+  sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\nvarying float vLeaf;')
+    // leaf normals come from the crown, the same both sides of a card
+    .replace('#include <normal_fragment_begin>',THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;','normal *= mix(faceDirection,1.0,vLeaf);'))
+    // smaller mips average the leaves away; hold the coverage up so a far tree doesn't go thin
+    .replace('#include <alphatest_fragment>',`{ vec2 tc=vMapUv*vec2(${ATLAS_W}.0,${ATLAS_H}.0); vec2 dx=dFdx(tc), dy=dFdy(tc);
+        float mip=max(0.0,0.5*log2(max(dot(dx,dx),dot(dy,dy)))); diffuseColor.a*=1.0+0.18*mip; }
+      #include <alphatest_fragment>`)
+    // light through the leaves with the sun behind them, and a little wrap so a crown's shady side isn't flat
+    .replace('#include <lights_fragment_end>',`#include <lights_fragment_end>
+      #if NUM_DIR_LIGHTS > 0
+        { float tr=pow(max(dot(-geometryViewDir,directionalLights[0].direction),0.0),4.0);
+          reflectedLight.directDiffuse+=vLeaf*diffuseColor.rgb*directionalLights[0].color*(1.3*tr+0.12)/PI; }
+      #endif
+      reflectedLight.directSpecular*=1.0-0.8*vLeaf; reflectedLight.indirectSpecular*=1.0-0.9*vLeaf;`);
+};
+const TREE_CHUNK=450, TREE_FAR={near:350,low:200}, TREE_HIDE=1550;
 const trees=[];
+// Planting: one period of trees, copied along the whole bank, so it repeats exactly when it snaps forward.
+// A noise field gathers them into stands with clearings between; species follow the distance from the water (willow
+// and birch at the edge, conifers behind) and trees get taller further back. Bushes line the forest edge.
 {
-  const rnd=mulberry32(4242); const _m=new THREE.Matrix4(), _p=V3(), _q=new THREE.Quaternion(), _s=V3(), _c=new THREE.Color();
-  const make=(geo,perSide,minX,maxX,scaleLo,scaleHi,tint)=>{
-    const total=perSide*2*3; const mesh=new THREE.InstancedMesh(geo,new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.95,metalness:0}),total);
-    mesh.frustumCulled=false; let i=0;
-    for(let n=0;n<perSide;n++){
-      const side=n%2===0?1:-1; const ax=minX+rnd()*(maxX-minX); const z0=-LAND_P/2+rnd()*LAND_P;
-      const y=landH(ax,z0); if(y<1.6){ n--; continue; }
-      const sc=scaleLo+rnd()*(scaleHi-scaleLo); const rot=rnd()*Math.PI*2; const tt=0.8+rnd()*0.45;
-      for(let m=-1;m<=1;m++){
-        _p.set(side*ax,y-0.25,z0+m*LAND_P); _q.setFromAxisAngle(UP,rot); _s.set(sc,sc*(0.9+rnd()*0.2),sc);
-        _m.compose(_p,_q,_s); mesh.setMatrixAt(i,_m); _c.setRGB(tt*tint[0],tt*tint[1],tt*tint[2]); mesh.setColorAt(i,_c); i++;
-      }
-    }
-    mesh.count=i; mesh.userData.full=i; mesh.instanceMatrix.needsUpdate=true; if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
-    shore.add(mesh); trees.push(mesh); return mesh;
-  };
-  make(coniferGeometry(),900,SHORE_X+18,SHORE_X+300,0.8,1.9,[1,1,1]);
-  make(broadleafGeometry(),150,SHORE_X+14,SHORE_X+140,0.7,1.3,[1,1.05,0.95]);
+  const rnd=mulberry32(4242), k=2*Math.PI/LAND_P, list=[];
+  const stand=(ax,z)=>0.5+0.3*Math.sin(z*k*7+ax*0.021+1.3)+0.22*Math.sin(z*k*17-ax*0.047+0.4)*Math.sin(z*k*3+ax*0.011+2.1);
+  const pick=(d,r)=>{ if(d<22){ return r<0.3?'willow':r<0.58?'birch':r<0.86?'broadleaf':'spruce'; }
+    if(d<70){ return r<0.36?'broadleaf':r<0.55?'birch':r<0.85?'spruce':'pine'; } return r<0.55?'spruce':r<0.82?'pine':'broadleaf'; };
+  let nTrees=0, nBush=0;
+  for(let n=0;n<80000 && (nTrees<2600||nBush<900);n++){
+    const side=n%2===0?1:-1, d=8+Math.pow(rnd(),1.8)*300, ax=SHORE_X+d, z0=-LAND_P/2+rnd()*LAND_P, y=landH(ax,z0), s=stand(ax,z0), r=rnd();
+    const bush=nBush<900 && d<90 && s>0.22 && r<0.32;
+    if(y<(bush?0.5:0.7)) continue;
+    if(!bush && (nTrees>=2600 || rnd()>clamp((s-0.32)/0.22,0,1))) continue;
+    if(bush && nBush>=900) continue;
+    const kind=bush?'broadleaf':pick(d-8,rnd()), grow=0.85+0.4*clamp(d/220,0,1);
+    const sc=bush?0.2+0.16*rnd():(0.8+0.5*rnd())*grow, tt=(bush?0.62:0.72)+0.3*rnd(), dark=kind==='spruce'?0.85:1;
+    list.push({kind,side,ax,z0,y,sc,sink:bush?6.5*sc:0.3,sy:bush?0.75:0.92+0.16*rnd(),rot:rnd()*6.283,tint:[tt*dark*(0.94+0.12*rnd()),tt*dark,tt*dark*(0.88+0.18*rnd())],rank:rnd()});
+    if(bush)nBush++; else nTrees++;
+  }
+  // into chunks: per kind, per TREE_CHUNK of z (both banks in one, since looking down the course sees both), ordered by rank so thinning keeps the same trees in every copy
+  const groups=new Map(), nChunk=Math.round(LAND_P*SHORE_SPAN/TREE_CHUNK), half=(SHORE_SPAN-1)/2;
+  for(const t of list) for(let m=-half;m<=half;m++){ const z=t.z0+m*LAND_P, ci=clamp(Math.floor((z+LAND_P*SHORE_SPAN/2)/TREE_CHUNK),0,nChunk-1), key=`${t.kind}|${ci}`;
+    if(!groups.has(key))groups.set(key,[]); groups.get(key).push({t,z}); }
+  const _m=new THREE.Matrix4(), _p=V3(), _q=new THREE.Quaternion(), _s=V3(), _c=new THREE.Color();
+  for(const [key,g] of groups){ const [kind,ci]=key.split('|');
+    g.sort((a,b)=>a.t.rank-b.t.rank);
+    const mesh=new THREE.InstancedMesh(TREE_GEO[kind][0],treeMat,g.length);
+    g.forEach(({t,z},i)=>{ _p.set(t.side*t.ax,t.y-t.sink,z); _q.setFromAxisAngle(UP,t.rot); _s.set(t.sc,t.sc*t.sy,t.sc); _m.compose(_p,_q,_s); mesh.setMatrixAt(i,_m); mesh.setColorAt(i,_c.setRGB(...t.tint)); });
+    mesh.instanceMatrix.needsUpdate=true; mesh.instanceColor.needsUpdate=true;
+    mesh.computeBoundingSphere(); mesh.frustumCulled=true;
+    mesh.userData={kind,side:0,chunk:+ci,full:g.length,zmid:-LAND_P*SHORE_SPAN/2+(+ci+0.5)*TREE_CHUNK,lod:0};
+    shore.add(mesh); trees.push(mesh); }
 }
 function setTreeDensity(f){ for(const m of trees)m.count=Math.round(m.userData.full*f); }
+// the water's reflection is blurred anyway: draw it with the cheap trees, then put the near ones back
+function treesFar(on){ for(const m of trees) m.geometry=TREE_GEO[m.userData.kind][on?1:m.userData.lod]; }
+// a chunk far enough down the course (along z) swaps to the cheaper trees, and one beyond the ridge isn't drawn
+function updateTreeLod(){
+  const far=quality===0?TREE_FAR.low:TREE_FAR.near, cz=camera.position.z-shore.position.z;
+  for(const m of trees){ const d=Math.abs(cz-m.userData.zmid)-TREE_CHUNK/2, lod=d>far?1:0;
+    m.visible=d<TREE_HIDE;   // past the nearer ridge, which stands round the camera at 1.5 km, a chunk can't be seen
+    if(lod!==m.userData.lod){ m.userData.lod=lod; m.geometry=TREE_GEO[m.userData.kind][lod]; } }
+}
 function makeRidge(radius,n,baseH,varH,color,seed){
   const rnd=mulberry32(seed); const ph=[rnd()*6,rnd()*6,rnd()*6,rnd()*6]; const hs=[];
   for(let i=0;i<n;i++){const a=i/n*Math.PI*2; const big=0.5+0.5*Math.sin(a*3+ph[0])*Math.sin(a*5+ph[1]); const mid=0.5+0.5*Math.sin(a*11+ph[2])*Math.cos(a*17+ph[3]); hs.push(baseH+varH*(0.55*big+0.3*mid+0.15*rnd()));}
@@ -3012,6 +3217,7 @@ function tick(dt){
   sky.position.copy(camera.position); hills.position.set(camera.position.x,0,camera.position.z);
   shore.position.z=Math.round(camera.position.z/LAND_P)*LAND_P;
   skyUniforms.uTime.value=simTime;
+  treeUniforms.uTime.value=simTime; updateTreeLod();
   for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uTime.value=simTime; m.uniforms.uBoat.value.set(0,0,boatZ-STERN_OFF); }
   renderer.shadowMap.needsUpdate=true;
   renderReflection();

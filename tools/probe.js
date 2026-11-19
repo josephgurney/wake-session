@@ -30,8 +30,15 @@ export function render(n = 60) {
 
 // Driving the game by hand, for when the page isn't animating (a hidden or background tab) or for repeatable shots.
 /* global tick, keys, cam, R, boatZ, crestX, STERN_OFF, onDown, onUp, paused */
-export function step(sec, fps = 60) { const n = Math.round(sec * fps); for (let i = 0; i < n; i++) tick(1 / fps); }
-export function hud(show) { for (const id of ['hud', 'touch']) { const e = document.getElementById(id); if (e) e.style.visibility = show ? '' : 'hidden'; } }
+let stepN = 0;
+export function step(sec, fps = 60) {
+  const n = Math.max(1, Math.round(sec * fps)); for (let i = 0; i < n; i++) tick(1 / fps);
+  // a hidden pane only repaints when something on the page visibly changes: flick a 1 px dot in the corner
+  let dot = document.getElementById('probe-dot');
+  if (!dot) { dot = document.createElement('div'); dot.id = 'probe-dot'; dot.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;z-index:99;pointer-events:none'; document.body.appendChild(dot); }
+  dot.style.background = ++stepN % 2 ? '#010101' : '#020202';
+}
+export function hud(show) { for (const id of ['hud', 'touch', 'loader']) { const e = document.getElementById(id); if (e) e.style.visibility = show ? '' : 'hidden'; } }
 export function view(mode) { cam.mode = mode; cam.snap = true; step(0.5); }
 export function hold(sec, held = {}) { for (const k in held) keys[k] = held[k]; step(sec); for (const k in held) keys[k] = false; }
 // cut out past the far wake, edge hard back in holding Space, let go at the lip; returns when the board is down again
@@ -81,6 +88,37 @@ export async function checkSpray() {
 }
 /* global openSettings, settingsEl */
 
+/* global trees, treeGeometry, paintFoliageAtlas, updateTreeLod, TREE_CHUNK, TREE_KINDS, setTreeDensity, LAND_P, THREE */
+export function checkTrees() {
+  const bad = [];
+  if (typeof treeGeometry !== 'function' || typeof paintFoliageAtlas !== 'function' || typeof updateTreeLod !== 'function') return ['treeGeometry / paintFoliageAtlas / updateTreeLod'];
+  if (TREE_CHUNK !== 450) bad.push('TREE_CHUNK');
+  for (const k of TREE_KINDS) for (const lod of [0, 1]) {
+    const g = treeGeometry(k, lod, 1);
+    for (const a of ['position', 'normal', 'uv', 'color', 'aSway']) if (!g.attributes[a]) bad.push(`${k} lod${lod} has no ${a}`);
+  }
+  const kinds = new Set(trees.map(m => m.userData.kind));
+  for (const k of ['spruce', 'pine', 'broadleaf', 'birch', 'willow']) if (!kinds.has(k)) bad.push(`no ${k} planted`);
+  if (trees.some(m => !m.frustumCulled || !m.boundingSphere)) bad.push('chunks must be frustum-culled with bounding spheres');
+  // every chunk repeats two chunks (one period) along, instance for instance, so the forward snap can't pop
+  const key = m => `${m.userData.kind}|${m.userData.side}|${m.userData.chunk}`, by = new Map(trees.map(m => [key(m), m]));
+  const per = LAND_P / TREE_CHUNK, a = new THREE.Matrix4(), b = new THREE.Matrix4();
+  let pairs = 0;
+  for (const m of trees) {
+    const n = by.get(`${m.userData.kind}|${m.userData.side}|${m.userData.chunk + per}`); if (!n) continue; pairs++;
+    if (n.userData.full !== m.userData.full) { bad.push(`period mismatch in count ${key(m)}`); continue; }
+    for (let i = 0; i < m.userData.full; i++) {
+      m.getMatrixAt(i, a); n.getMatrixAt(i, b); a.elements[14] += LAND_P;
+      if (a.elements.some((v, j) => Math.abs(v - b.elements[j]) > 1e-3)) { bad.push(`period mismatch at ${key(m)} #${i}`); break; }
+    }
+  }
+  if (!pairs) bad.push('no chunk pairs a period apart');
+  const full = trees.reduce((s, m) => s + m.userData.full, 0);
+  setTreeDensity(0.5); const half = trees.reduce((s, m) => s + m.count, 0); setTreeDensity(1);
+  if (Math.abs(half / full - 0.5) > 0.02) bad.push(`density 0.5 gave ${half}/${full}`);
+  return bad;
+}
+
 const RUNS = [{ cut: 3, mode: 'relaxed' }, { cut: 3, mode: 'hold' }, { cut: 3, mode: 'pop' }, { cut: 6, mode: 'hold' }, { cut: 6, mode: 'pop' }];
 export async function bench() {
   const src = await (await fetch('/tools/jump_bench.py?' + Date.now())).text();
@@ -91,4 +129,34 @@ export async function bench() {
     return { run: `${cfg.cut} m ${cfg.mode}`, result: r.result, airT: +r.airT.toFixed(3), aboveLip: +r.aboveLip.toFixed(3),
              speedRatio: +r.speedRatio.toFixed(3), maxT: +r.maxT.toFixed(3) };
   });
+}
+
+// Look from anywhere: hold the camera at pos looking at target (the game's camera code is swapped out, since any frame
+// the browser draws on its own would otherwise put it back), until unpeek(). Coordinates are world metres; the course
+// runs along +z, the banks at x = ±76.
+/* global camera, updateCamera */
+export function peek(pos, target, fov = 54) {
+  if (!window.__probeCam) window.__probeCam = window.updateCamera;   // on window, so a re-imported probe still finds it
+  window.updateCamera = () => { camera.position.set(...pos); camera.lookAt(...target); camera.fov = fov; camera.updateProjectionMatrix(); };
+  step(0.05);
+}
+export function unpeek() { if (window.__probeCam) { window.updateCamera = window.__probeCam; window.__probeCam = null; camera.fov = cam.fov; cam.snap = true; step(0.05); } }
+
+// after a reload: wait for the loader, take the handle, fix quality on high, hide the HUD and ride a couple of seconds
+/* global booted, qualityAuto */
+export async function start(q = 2) {
+  await new Promise(r => { const t = setInterval(() => { if (typeof booted !== 'undefined' && booted) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 15000); });
+  document.getElementById('go')?.click(); window.qualityAuto = false; qualityAuto = false; setQuality(q); hud(false); step(2.5);
+}
+
+// Save what the game just drew as a JPEG, by posting it to a local upload server on :8792 (for a hidden tab, where the
+// browser's own screenshots go stale). Draws one frame first, then copies the canvas in the same task, before the
+// drawing buffer is cleared.
+export async function shot(name, w = 1280) {
+  tick(1 / 60);
+  const src = document.getElementById('c'), h = Math.round(w * src.height / src.width);
+  const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(src, 0, 0, w, h);
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.88));
+  await fetch(`http://127.0.0.1:8792/${name}.jpg`, { method: 'POST', body: blob });
+  return name;
 }
