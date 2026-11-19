@@ -430,3 +430,75 @@ export async function benchAll() {
   });
   return { misses, runs: b.runs, ...rows };
 }
+
+// Checks for the whitewater pass (docs/superpowers/plans/2026-11-19-whitewater.md).
+// foamCover: for each region of the wake (boat frame: u across, d behind the transom; with crest:true, u is s = |u| - crest,
+// measured on both sides), look straight down from 14 m over it with the board's foam, the spray, the rider and the rope
+// hidden, and return the share (%) of points, 6 per metre each way, whose pixel is foam (brightest channel over 170).
+/* global foam, rider, ropeSegs, waterNear, waterFar, WATER_SP, waterAt, simTime */
+export const FOAM_REGIONS = [
+  { name: 'ahead', u: [3, 8], d: [-12, -1], want: [0, 0] },
+  { name: 'mid5', u: [-0.8, 0.8], d: [3, 7], want: [60, 100] },
+  { name: 'mid50', u: [-0.8, 0.8], d: [45, 55], want: [15, 60] },
+  { name: 'mid100', u: [-0.8, 0.8], d: [95, 105], want: [3, 100] },
+  { name: 'mid150', u: [-0.8, 0.8], d: [145, 155], want: [0, 3] },
+  { name: 'crest5', crest: true, u: [-0.4, 0.2], d: [4, 7], want: [50, 100] },
+  { name: 'crest20', crest: true, u: [-0.4, 0.2], d: [18, 23], want: [15, 60] },
+  { name: 'crest40', crest: true, u: [-0.4, 0.2], d: [38, 43], want: [5, 100] },
+  { name: 'crest80', crest: true, u: [-0.4, 0.2], d: [78, 83], want: [0, 5] },
+  { name: 'face20', crest: true, u: [0.5, 1.5], d: [18, 23], want: [0, 10] },
+  { name: 'lace10', crest: true, u: [-3, -1], d: [8, 12], want: [10, 50] },
+  { name: 'lace60', crest: true, u: [-3, -1], d: [58, 62], want: [0, 10] },
+  { name: 'flats', crest: true, u: [4, 6], d: [18, 23], want: [0, 2] },
+];
+export function foamCover(regions = FOAM_REGIONS) {
+  const gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, sz = boatZ - STERN_OFF;
+  const hide = [foam, spray.mesh, rider, ...ropeSegs], vis = hide.map(o => o.visible); hide.forEach(o => { o.visible = false; });
+  const fov0 = camera.fov, q0 = camera.quaternion.clone(), p = new THREE.Vector3(), px = new Uint8Array(W * H * 4), out = {};
+  for (const r of regions) {
+    let hit = 0, n = 0;
+    for (const side of r.crest ? [-1, 1] : [1]) {
+      const at = (a, d) => r.crest ? side * (crestX(d) + a) : a;
+      const uc = at((r.u[0] + r.u[1]) / 2, (r.d[0] + r.d[1]) / 2), zc = sz - (r.d[0] + r.d[1]) / 2;
+      camera.position.set(uc, 14, zc); camera.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+      camera.fov = 54; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+      waterNear.position.set(0, 0, Math.round(zc / WATER_SP) * WATER_SP); waterFar.position.set(uc, -0.02, zc);
+      const hw = waterNear.geometry.userData.half; waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x, waterNear.position.z, hw[0] - 1, hw[1] - 1);
+      renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost();
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      for (let a = r.u[0]; a <= r.u[1] + 1e-6; a += 1 / 6) for (let d = r.d[0]; d <= r.d[1] + 1e-6; d += 1 / 6) {
+        const x = at(a, d), z = sz - d; p.set(x, waterAt(x, z, boatZ, simTime), z).project(camera);
+        const ix = Math.floor((p.x + 1) / 2 * W), iy = Math.floor((p.y + 1) / 2 * H);
+        if (ix < 0 || iy < 0 || ix >= W || iy >= H) continue;
+        const k = (iy * W + ix) * 4; n++; if (Math.max(px[k], px[k + 1], px[k + 2]) > 170) hit++;
+      }
+    }
+    out[r.name] = n ? +(100 * hit / n).toFixed(1) : NaN;
+  }
+  hide.forEach((o, i) => { o.visible = vis[i]; });
+  camera.quaternion.copy(q0); camera.fov = fov0; camera.updateProjectionMatrix(); cam.snap = true; step(0.05);
+  return out;
+}
+// every region outside the share of foam it should have
+export function checkFoam() {
+  const got = foamCover(), bad = [];
+  for (const r of FOAM_REGIONS) { const v = got[r.name]; if (!(v >= r.want[0] && v <= r.want[1])) bad.push(`${r.name} ${v}% (want ${r.want[0]}-${r.want[1]})`); }
+  return bad;
+}
+// Stills for screenshots: freeze() stops the game loop (the page keeps its last frame), freeze(false) starts it again.
+// overhead(u, d, h) freezes and draws the view straight down from h metres over (u, d) in the boat frame.
+/* global frame */
+// The game's tick is swapped out too: a hidden pane holds back animation frames, so the one already queued can run later,
+// at the screenshot, and draw over the still.
+export function freeze(on = true) {
+  if (on && !window.__raf) { window.__raf = window.requestAnimationFrame; window.__tick = window.tick; window.requestAnimationFrame = () => 0; window.tick = () => {}; }
+  else if (!on && window.__raf) { window.requestAnimationFrame = window.__raf; window.tick = window.__tick; delete window.__raf; delete window.__tick; window.requestAnimationFrame(frame); }
+}
+export function overhead(u = 0, d = 20, h = 14, fov = 54) {
+  freeze(true); const sz = boatZ - STERN_OFF, z = sz - d;
+  camera.position.set(u, h, z); camera.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+  camera.fov = fov; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+  waterNear.position.set(0, 0, Math.round(z / WATER_SP) * WATER_SP); waterFar.position.set(u, -0.02, z);
+  const hw = waterNear.geometry.userData.half; waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x, waterNear.position.z, hw[0] - 1, hw[1] - 1);
+  renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost();
+}
