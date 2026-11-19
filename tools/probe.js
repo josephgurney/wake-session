@@ -512,3 +512,25 @@ export function flick() {
 }
 // a frozen still from one of the game's cameras (0 follow, 1 long lens, 2 tower)
 export function still(mode) { freeze(false); hud(false); view(mode); freeze(true); renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost(); flick(); }
+// Crest spray: particles emitted over one second within half a metre of a crest, 2.5 to 13 m behind the transom (clear of
+// the prop wash and the rider), as a share of what the high setting throws. Returns what's wrong.
+/* global BOAT_SPEED, crestStrength */
+export function checkCrestSpray() {
+  const bad = [], q = quality;
+  const count = () => {
+    const c0 = spray.clock, i0 = spray.i; step(1);
+    const T = spray.geo.attributes.aT.array, P0 = spray.geo.attributes.aP0.array; let n = 0;
+    for (let k = 0; k < spray.size; k++) {
+      const t0 = T[k * 4]; if (!(t0 > c0) || T[k * 4 + 1] <= 0) continue;
+      const bz = boatZ - BOAT_SPEED * (spray.clock - t0), d = bz - STERN_OFF - P0[k * 3 + 2], x = P0[k * 3];
+      if (d >= 2.5 && d <= 13 && Math.abs(Math.abs(x) - crestX(d)) < 0.5) n++;
+    }
+    return { n, wrapped: spray.i < i0 };
+  };
+  (0, eval)('qualityAuto=false'); setQuality(2); step(0.5);
+  const hi = count(); setQuality(0); step(0.5); const lo = count(); setQuality(q);
+  if (typeof crestStrength !== 'function' || !(crestStrength(3) > crestStrength(30))) bad.push('crestStrength(d) missing or not falling with d');
+  if (hi.n < 80) bad.push(`only ${hi.n} crest particles a second on high, want 80+`);
+  if (!(lo.n < hi.n * 0.5)) bad.push(`low throws ${lo.n}, high ${hi.n}: low should throw well under half`);
+  return bad;
+}

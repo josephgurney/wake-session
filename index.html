@@ -3113,6 +3113,14 @@ function updateEffects(dt){
   spray.emitRate(sprayAcc,'washDrop',300,dt,()=>spray.emit((Math.random()-0.5)*1.3,0.0,sz-0.3-Math.random()*0.8,(Math.random()-0.5)*2.4,1.2+Math.random()*3.4,BOAT_SPEED*0.3+Math.random()*2,0.45+Math.random()*0.5,0.015+Math.random()*0.025,SPRAY_DROP));
   spray.emitRate(sprayAcc,'washSheet',40,dt,()=>spray.emit((Math.random()-0.5)*1.4,0.05,sz-0.4-Math.random()*1.0,(Math.random()-0.5)*2.0,0.8+Math.random()*2.2,BOAT_SPEED*0.35+Math.random()*1.5,0.5+Math.random()*0.5,0.3+Math.random()*0.4,SPRAY_SHEET));
   spray.emitRate(sprayAcc,'washMist',18,dt,()=>spray.emit((Math.random()-0.5)*1.8,0.3,sz-0.8-Math.random()*1.5,(Math.random()-0.5)*1.0,0.3+Math.random()*0.6,BOAT_SPEED*0.45,2.0+Math.random()*1.5,1.0+Math.random()*1.2,SPRAY_MIST));
+  // the breaking crests near the boat: drops thrown up and out as each crest spills, and a little mist, from 1 to 12 m
+  // behind the transom, most where the crest breaks hardest (crestStrength). The crest runs out at about 1.5 m/s.
+  const crestD=()=>{ for(let i=0;i<8;i++){ const d=1+Math.random()*11; if(Math.random()*0.95<crestStrength(d)) return d; } return 2; };
+  const onCrest=(d,side)=>{ const x=side*(crestX(d)+(Math.random()-0.35)*0.35); return [x,wakeH(x,d,wakePh(boatZ))+0.03,sz-d]; };
+  spray.emitRate(sprayAcc,'crestDrop',220,dt,()=>{ const d=crestD(), side=Math.random()<0.5?-1:1, [x,y,z]=onCrest(d,side);
+    spray.emit(x,y,z, side*(0.8+Math.random()*1.5),0.5+Math.random()*1.6,0.25+(Math.random()-0.5)*0.6, 0.35+Math.random()*0.5,0.012+Math.random()*0.022,SPRAY_DROP); });
+  spray.emitRate(sprayAcc,'crestMist',16,dt,()=>{ const d=crestD(), side=Math.random()<0.5?-1:1, [x,y,z]=onCrest(d,side);
+    spray.emit(x,y+0.08,z, side*(0.3+Math.random()*0.6),0.2+Math.random()*0.4,0.25, 1.2+Math.random()*0.9,0.45+Math.random()*0.6,SPRAY_MIST); });
   spray.update(dt); updateFoam(dt,simTime);
 }
 function updateBoatVisual(dt){
