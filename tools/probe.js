@@ -430,3 +430,140 @@ export async function benchAll() {
   });
   return { misses, runs: b.runs, ...rows };
 }
+
+// Checks for the whitewater pass (docs/superpowers/plans/2026-11-19-whitewater.md).
+// foamCover: for each region of the wake (boat frame: u across, d behind the transom; with crest:true, u is s = |u| - crest,
+// measured on both sides), look straight down from 14 m (or the region's h) over it with the board's foam, the spray, the rider and the rope
+// hidden, and return the share (%) of points, 6 per metre each way, whose pixel is foam (brightest channel over 170).
+/* global foam, rider, ropeSegs, waterNear, waterFar, WATER_SP, waterAt, simTime */
+export const FOAM_REGIONS = [
+  { name: 'ahead', u: [3, 8], d: [-12, -1], want: [0, 0] },
+  { name: 'mid5', u: [-0.8, 0.8], d: [3, 7], want: [60, 100] },
+  { name: 'mid50', u: [-0.8, 0.8], d: [45, 55], want: [15, 60] },
+  { name: 'mid100', u: [-0.8, 0.8], d: [95, 105], want: [3, 100] },
+  { name: 'mid150', u: [-0.8, 0.8], d: [145, 155], want: [0, 3] },
+  { name: 'crest5', crest: true, u: [-0.4, 0.2], d: [4, 7], want: [50, 100] },
+  { name: 'crest20', crest: true, u: [-0.4, 0.2], d: [18, 23], want: [15, 60] },
+  { name: 'crest40', crest: true, u: [-0.4, 0.2], d: [38, 43], want: [5, 100] },
+  { name: 'crest80', crest: true, u: [-0.4, 0.2], d: [78, 83], want: [0, 5] },
+  { name: 'face20', crest: true, u: [0.5, 1.5], d: [18, 23], want: [0, 10] },
+  { name: 'lace20', crest: true, u: [-2.2, -1], d: [18, 23], want: [10, 50] },
+  { name: 'lace60', crest: true, u: [-3, -1], d: [58, 62], want: [0, 10] },
+  { name: 'flats', crest: true, u: [4, 6], d: [18, 23], want: [0, 2] },
+  // from 75 m up, where a pixel covers about 15 cm of lake: the breaking crest must still read as white, not grey
+  { name: 'crest5high', crest: true, u: [-0.4, 0.2], d: [4, 7], h: 75, want: [40, 100] },
+];
+export function foamCover(regions = FOAM_REGIONS) {
+  const gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, sz = boatZ - STERN_OFF;
+  const hide = [foam, spray.mesh, rider, ...ropeSegs], vis = hide.map(o => o.visible); hide.forEach(o => { o.visible = false; });
+  const fov0 = camera.fov, q0 = camera.quaternion.clone(), p = new THREE.Vector3(), px = new Uint8Array(W * H * 4), out = {};
+  for (const r of regions) {
+    let hit = 0, n = 0;
+    for (const side of r.crest ? [-1, 1] : [1]) {
+      const at = (a, d) => r.crest ? side * (crestX(d) + a) : a;
+      const uc = at((r.u[0] + r.u[1]) / 2, (r.d[0] + r.d[1]) / 2), zc = sz - (r.d[0] + r.d[1]) / 2;
+      camera.position.set(uc, r.h || 14, zc); camera.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+      camera.fov = 54; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+      waterNear.position.set(0, 0, Math.round(zc / WATER_SP) * WATER_SP); waterFar.position.set(uc, -0.02, zc);
+      const hw = waterNear.geometry.userData.half; waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x, waterNear.position.z, hw[0] - 1, hw[1] - 1);
+      renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost();
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      for (let a = r.u[0]; a <= r.u[1] + 1e-6; a += 1 / 6) for (let d = r.d[0]; d <= r.d[1] + 1e-6; d += 1 / 6) {
+        const x = at(a, d), z = sz - d; p.set(x, waterAt(x, z, boatZ, simTime), z).project(camera);
+        const ix = Math.floor((p.x + 1) / 2 * W), iy = Math.floor((p.y + 1) / 2 * H);
+        if (ix < 0 || iy < 0 || ix >= W || iy >= H) continue;
+        const k = (iy * W + ix) * 4; n++; if (Math.max(px[k], px[k + 1], px[k + 2]) > 170) hit++;
+      }
+    }
+    out[r.name] = n ? +(100 * hit / n).toFixed(1) : NaN;
+  }
+  hide.forEach((o, i) => { o.visible = vis[i]; });
+  camera.quaternion.copy(q0); camera.fov = fov0; camera.updateProjectionMatrix(); cam.snap = true; step(0.05);
+  return out;
+}
+// every region outside the share of foam it should have, averaged over n moments half a second apart (the foam's pattern
+// is fixed to the lake, so a few square metres can be lucky or unlucky at any one moment)
+export function checkFoam(n = 4) {
+  const runs = []; for (let i = 0; i < n; i++) { if (i) step(0.55); runs.push(foamCover()); }
+  const got = Object.fromEntries(Object.keys(runs[0]).map(k => [k, +(runs.reduce((s, r) => s + r[k], 0) / n).toFixed(1)])), bad = [];
+  for (const r of FOAM_REGIONS) { const v = got[r.name]; if (!(v >= r.want[0] && v <= r.want[1])) bad.push(`${r.name} ${v}% (want ${r.want[0]}-${r.want[1]})`); }
+  return bad;
+}
+// Stills for screenshots: freeze() stops the game loop (the page keeps its last frame), freeze(false) starts it again.
+// overhead(u, d, h) freezes and draws the view straight down from h metres over (u, d) in the boat frame.
+/* global frame */
+// The game's tick is swapped out too: a hidden pane holds back animation frames, so the one already queued can run later,
+// at the screenshot, and draw over the still.
+// The loop's next request is held (not dropped) while frozen, and unfreezing hands back only that: if the frame already
+// queued when it froze hasn't run yet, the loop never stopped, and queueing another would run two.
+export function freeze(on = true) {
+  if (on && !window.__raf) { window.__raf = window.requestAnimationFrame; window.__tick = window.tick; window.__held = null; window.requestAnimationFrame = cb => { window.__held = cb; return 0; }; window.tick = () => {}; }
+  else if (!on && window.__raf) { const held = window.__held; window.requestAnimationFrame = window.__raf; window.tick = window.__tick; delete window.__raf; delete window.__tick; delete window.__held; if (held) window.requestAnimationFrame(held); }
+}
+export function overhead(u = 0, d = 20, h = 14, fov = 54) {
+  freeze(true); const sz = boatZ - STERN_OFF, z = sz - d;
+  camera.position.set(u, h, z); camera.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+  camera.fov = fov; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+  waterNear.position.set(0, 0, Math.round(z / WATER_SP) * WATER_SP); waterFar.position.set(u, -0.02, z);
+  const hw = waterNear.geometry.userData.half; waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x, waterNear.position.z, hw[0] - 1, hw[1] - 1);
+  renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost(); flick();
+}
+// a hidden pane only repaints when the page visibly changes, and a new WebGL frame alone doesn't count: flick a dot
+export function flick() {
+  let dot = document.getElementById('probe-dot');
+  if (!dot) { dot = document.createElement('div'); dot.id = 'probe-dot'; dot.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;z-index:99;pointer-events:none'; document.body.appendChild(dot); }
+  dot.style.background = ++stepN % 2 ? '#010101' : '#020202';
+}
+// a frozen still from one of the game's cameras (0 follow, 1 long lens, 2 tower)
+export function still(mode) { freeze(false); hud(false); view(mode); freeze(true); renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost(); flick(); }
+// Crest spray: particles emitted over one second within half a metre of a crest, 2.5 to 13 m behind the transom (clear of
+// the prop wash and the rider), as a share of what the high setting throws. Returns what's wrong.
+/* global BOAT_SPEED, crestStrength */
+export function checkCrestSpray() {
+  const bad = [], q = quality;
+  const count = () => {
+    const c0 = spray.clock, i0 = spray.i; step(1);
+    const T = spray.geo.attributes.aT.array, P0 = spray.geo.attributes.aP0.array; let n = 0;
+    for (let k = 0; k < spray.size; k++) {
+      const t0 = T[k * 4]; if (!(t0 > c0) || T[k * 4 + 1] <= 0) continue;
+      const bz = boatZ - BOAT_SPEED * (spray.clock - t0), d = bz - STERN_OFF - P0[k * 3 + 2], x = P0[k * 3];
+      if (d >= 2.5 && d <= 13 && Math.abs(Math.abs(x) - crestX(d)) < 0.5) n++;
+    }
+    return { n, wrapped: spray.i < i0 };
+  };
+  (0, eval)('qualityAuto=false'); setQuality(2); step(0.5);
+  const hi = count(); setQuality(0); step(0.5); const lo = count(); setQuality(q);
+  if (typeof crestStrength !== 'function' || !(crestStrength(3) > crestStrength(30))) bad.push('crestStrength(d) missing or not falling with d');
+  if (hi.n < 80) bad.push(`only ${hi.n} crest particles a second on high, want 80+`);
+  if (!(lo.n < hi.n * 0.5)) bad.push(`low throws ${lo.n}, high ${hi.n}: low should throw well under half`);
+  return bad;
+}
+// freeze(false) must restart the loop only if freeze(true) actually stopped it (the frame already queued when it froze
+// would otherwise carry on as a second loop). Spies on requestAnimationFrame; returns what's wrong.
+export function checkFreeze() {
+  const bad = [], raf = window.requestAnimationFrame; let calls = 0;
+  window.requestAnimationFrame = cb => { calls++; return raf(cb); };
+  try {
+    freeze(true); freeze(false);
+    if (calls !== 0) bad.push(`freeze then unfreeze before the queued frame ran queued ${calls} more loop(s)`);
+    calls = 0; freeze(true); window.requestAnimationFrame(frame); freeze(false);   // the queued frame runs while frozen
+    if (calls !== 1) bad.push(`unfreezing after the loop stopped queued ${calls} frame(s), want 1`);
+  } finally { window.requestAnimationFrame = raf; }
+  return bad;
+}
+// Shimmer: the share (%) of water pixels (the lower part of the frame) that flash and flash back over three 60 fps frames
+// (brighter or darker than both neighbours by more than 40), averaged over n triples, from one of the game's cameras while
+// it rides. Foam that really moves past changes a pixel once; only aliasing flips it and back.
+export function shimmer(mode = 0, n = 6, from = 0.45) {
+  freeze(false); hud(false); view(mode);
+  const gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, rows = Math.floor(H * (1 - from));
+  const grab = () => { renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost(); const px = new Uint8Array(W * rows * 4); gl.readPixels(0, 0, W, rows, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
+  const lum = (p, i) => 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2];
+  let pct = 0;
+  for (let k = 0; k < n; k++) {
+    tick(1 / 60); const a = grab(); tick(1 / 60); const b = grab(); tick(1 / 60); const c = grab(); let f = 0;
+    for (let i = 0; i < a.length; i += 4) { const da = lum(b, i) - lum(a, i), dc = lum(b, i) - lum(c, i); if (Math.abs(da) > 40 && Math.abs(dc) > 40 && Math.sign(da) === Math.sign(dc)) f++; }
+    pct += 100 * f / (a.length / 4) / n;
+  }
+  return +pct.toFixed(3);
+}
