@@ -343,7 +343,7 @@ body.touch .card .grid.tc{display:grid}
     </div>
     <div class="card">
       <!-- the game's version: bump it with every change that lands on main, so a stale cache shows at a glance -->
-      <div class="ver" title="Game version">v0.6.0</div>
+      <div class="ver" title="Game version">v0.7.0</div>
       <div class="presents"><img src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349"><span>presents</span></div>
       <h1>Thursday <em>Yacht Club</em></h1>
       <div class="tagline">No Risk, No Story.</div>
@@ -474,6 +474,7 @@ try {
 </script>
 <script type="text/plain" id="game">
 'use strict';
+performance.mark('tyc:game'); // tools/probe.js times the world build from here to 'tyc:built'
 /* =====================================================================
    THURSDAY YACHT CLUB — a wakeboarding sim in a single file.
    Physics: rider is a point mass on an inelastic tow rope behind a boat
@@ -719,9 +720,9 @@ function renderReflection(){
   _rQ.x=(Math.sign(_rClip.x)+pm[8])/pm[0]; _rQ.y=(Math.sign(_rClip.y)+pm[9])/pm[5]; _rQ.z=-1; _rQ.w=(1+pm[10])/pm[14];
   _rClip.multiplyScalar(2/_rClip.dot(_rQ));
   pm[2]=_rClip.x; pm[6]=_rClip.y; pm[10]=_rClip.z+1; pm[14]=_rClip.w;
-  waterNear.visible=false; waterFar.visible=false; foam.visible=false;
+  waterNear.visible=false; waterFar.visible=false; foam.visible=false; treesFar(true);
   renderer.setRenderTarget(reflRT); renderer.render(scene,reflCam);
-  waterNear.visible=true; waterFar.visible=true; foam.visible=true;
+  waterNear.visible=true; waterFar.visible=true; foam.visible=true; treesFar(false);
 }
 
 // ---------- water ----------
@@ -841,9 +842,9 @@ const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP),waterMaterial(1));
 const waterFar=new THREE.Mesh(gridGeometry(9000,9000,1500),waterMaterial(0)); waterFar.frustumCulled=false; waterFar.position.y=-0.02; scene.add(waterFar);
 // quality: 2 high, 1 medium, 0 low. Auto mode steps down when frames run long, back up when there is headroom.
 const QUALITY=[
-  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.5},
-  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.75},
-  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1}];
+  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.3,treeFar:-1e9,treeHide:900,reflTrees:0,spray:0.25,sprayN:4096,props:false},
+  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.55,treeFar:180,treeHide:1200,reflTrees:550,spray:0.6,sprayN:8192,props:true},
+  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,treeFar:350,treeHide:1550,reflTrees:1550,spray:1,sprayN:16384,props:true}];
 const waterGeos={}; let quality=2, qualityAuto=true, frameEMA=1/60, qualityTimer=0;
 function setQuality(q){
   q=clamp(q,0,QUALITY.length-1); quality=q; const Q=QUALITY[q];
@@ -853,6 +854,8 @@ function setQuality(q){
   for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uDetail.value=Q.detail; m.uniforms.uReflOn.value=reflOn?1:0; }
   if(sun.shadow.mapSize.x!==Q.shadow){ sun.shadow.mapSize.set(Q.shadow,Q.shadow); if(sun.shadow.map){sun.shadow.map.dispose(); sun.shadow.map=null;} }
   setTreeDensity(Q.trees);
+  spray.rate=Q.spray; spray.setSize(Q.sprayN); props.visible=Q.props;
+  bankCheap.value=q===0?1:0;
   renderer.setPixelRatio(Math.min(devicePixelRatio,Q.pr)); resize();
   const q1=document.getElementById('quality'); if(q1)q1.textContent=`quality: ${Q.name}${qualityAuto?' (auto)':''}`;
 }
@@ -864,92 +867,459 @@ function autoQuality(dt){
 }
 
 // ---------- shoreline, trees and far hills ----------
-// The banks sit 76 m either side of the course. Everything on them is periodic in z (period LAND_P) and built three
-// periods long, so the whole group can snap forward by one period as the boat travels and nothing visibly changes.
-const SHORE_X=76, LAND_P=900;
+// The banks sit 76 m either side of the course. Everything on them is periodic in z (period LAND_P) and built SHORE_SPAN
+// periods long, so the whole group can snap forward by one period as the boat travels and nothing visibly changes. Five
+// periods put the far end of the bank at least 1.8 km ahead, behind the nearer ridge, so it never shows.
+const SHORE_X=76, LAND_P=900, SHORE_SPAN=5;
+// What the waterline is like along each bank: beach, rock or reeds, as weights that add up to one. Periodic in z; the
+// two banks are offset so they don't mirror each other.
+function shoreType(side,z){
+  const k=2*Math.PI/LAND_P, zz=z+(side<0?331:0);
+  const a=Math.sin(zz*k*3+0.7)+0.55*Math.sin(zz*k*7+2.1), b=Math.sin(zz*k*4+2.9)+0.55*Math.sin(zz*k*9+0.3);
+  const rock=smoothstep(0.55,1.05,a), reed=smoothstep(0.55,1.05,b)*(1-rock);
+  return {beach:1-rock-reed,rock,reed};
+}
+// Height of the bank. Beaches shelve gently, rocky stretches rise steeply from the water, reed beds stay low and flat
+// so the water creeps in among them.
 function landH(x,z){
-  const ax=Math.abs(x); const k=2*Math.PI/LAND_P;
-  const n=0.5*Math.sin(z*k*3+ax*0.011)+0.3*Math.sin(z*k*11+ax*0.031+1.7)+0.2*Math.sin(z*k*29-ax*0.07+0.4);
-  const shore=clamp((ax-SHORE_X)/18,0,1); const p=clamp((ax-SHORE_X)/120,0,1); const t=clamp((ax-SHORE_X)/520,0,1);
-  return -1.5+2.0*shore*(1+0.3*n)+4.0*Math.pow(p,1.5)*(1+n)+70*t*t*(0.8+0.3*n);
+  const ax=Math.abs(x), side=x<0?-1:1, k=2*Math.PI/LAND_P, zz=z+(side<0?331:0);
+  const n=0.5*Math.sin(zz*k*3+ax*0.011)+0.3*Math.sin(zz*k*11+ax*0.031+1.7)+0.2*Math.sin(zz*k*29-ax*0.07+0.4);
+  const st=shoreType(side,z), w=st.beach*20+st.rock*7+st.reed*30, lift=st.rock*1.4-st.reed*0.5;
+  const shore=clamp((ax-SHORE_X)/w,0,1), p=clamp((ax-SHORE_X)/120,0,1), t=clamp((ax-SHORE_X)/520,0,1);
+  return -1.5+(2.0+lift)*Math.pow(shore,1-0.4*st.rock)*(1+0.3*n)+4.0*Math.pow(p,1.5)*(1+n)+70*t*t*(0.8+0.3*n);
 }
-const _lc=new THREE.Color();
-function landColor(y,ax,z,out){
-  const r=mulberry32((Math.round(ax*0.37)*7919+Math.round(z*0.37)*104729)|0)();
-  if(y<0.5){ out.setRGB(0.40+0.06*r,0.36+0.05*r,0.26+0.04*r); }
-  else if(y<2.6){ const t=(y-0.5)/2.1; out.setRGB(0.40,0.36,0.26).lerp(_lc.setRGB(0.16+0.07*r,0.25+0.08*r,0.08+0.04*r),t); }
-  else { const t=clamp((y-2.6)/40,0,1); out.setRGB(0.07+0.05*r,0.12+0.06*r,0.05+0.03*r).lerp(_lc.setRGB(0.10,0.16,0.09),t); }
-  return out;
-}
-function landGeometry(side){
-  const x0=SHORE_X-10, x1=SHORE_X+640, sp=8;
-  const nx=Math.round((x1-x0)/sp)+1, nz=Math.round(LAND_P*3/sp)+1;
-  const pos=new Float32Array(nx*nz*3), col=new Float32Array(nx*nz*3); let k=0;
-  for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){
-    const ax=x0+i*sp, z=-LAND_P*1.5+j*sp; const y=landH(ax,z);
-    pos[k]=side*ax; pos[k+1]=y; pos[k+2]=z; landColor(y,ax,z,_lc); col[k]=_lc.r; col[k+1]=_lc.g; col[k+2]=_lc.b; k+=3;
-  }
+// where the bank meets the water (y = 0) on one side at z, as a distance out from the course
+function waterlineX(side,z){ let ax=SHORE_X-6; while(ax<SHORE_X+120 && landH(side*ax,z)<0) ax+=0.25; return ax; }
+function landGeometry(side,m){   // one period of one bank, centred on m*LAND_P
+  // finer across the waterline, where the bank's shape changes fastest
+  const xs=[]; for(let x=SHORE_X-10;x<SHORE_X+44;x+=2)xs.push(x); for(let x=SHORE_X+44;x<=SHORE_X+640;x+=8)xs.push(x);
+  const nz=Math.round(LAND_P/8)+1, sp=LAND_P/(nz-1), nx=xs.length;   // rows exactly a period apart end to end, so neighbours meet
+  const pos=new Float32Array(nx*nz*3), sh=new Float32Array(nx*nz*3); let k=0;
+  for(let j=0;j<nz;j++){ const z=(m-0.5)*LAND_P+j*sp, st=shoreType(side,z);
+    for(let i=0;i<nx;i++){ const ax=xs[i]; pos[k]=side*ax; pos[k+1]=landH(side*ax,z); pos[k+2]=z; sh[k]=st.beach; sh[k+1]=st.rock; sh[k+2]=st.reed; k+=3; } }
   const idx=new Uint32Array((nx-1)*(nz-1)*6); k=0;
   for(let j=0;j<nz-1;j++)for(let i=0;i<nx-1;i++){const a=j*nx+i,b=a+1,c=a+nx,d=c+1; if(side>0){idx[k++]=a;idx[k++]=c;idx[k++]=b;idx[k++]=b;idx[k++]=c;idx[k++]=d;} else {idx[k++]=a;idx[k++]=b;idx[k++]=c;idx[k++]=b;idx[k++]=d;idx[k++]=c;}}
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('color',new THREE.BufferAttribute(col,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); g.computeVertexNormals(); return g;
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('aShore',new THREE.BufferAttribute(sh,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); g.computeVertexNormals(); return g;
 }
-function mergeGeos(parts){
-  for(const p of parts){ if(!p.geo.index){ const n=p.geo.attributes.position.count; const ix=new Uint16Array(n); for(let i=0;i<n;i++)ix[i]=i; p.geo.setIndex(new THREE.BufferAttribute(ix,1)); } }
-  let nv=0,ni=0; for(const p of parts){nv+=p.geo.attributes.position.count; ni+=p.geo.index.count;}
-  const pos=new Float32Array(nv*3), nrm=new Float32Array(nv*3), col=new Float32Array(nv*3), idx=new Uint16Array(ni); let vo=0,io=0;
-  for(const p of parts){ const g=p.geo; const n=g.attributes.position.count; pos.set(g.attributes.position.array,vo*3); nrm.set(g.attributes.normal.array,vo*3); for(let i=0;i<n;i++){col[(vo+i)*3]=p.c[0];col[(vo+i)*3+1]=p.c[1];col[(vo+i)*3+2]=p.c[2];} for(let i=0;i<g.index.count;i++)idx[io+i]=g.index.array[i]+vo; vo+=n; io+=g.index.count; }
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('normal',new THREE.BufferAttribute(nrm,3)); g.setAttribute('color',new THREE.BufferAttribute(col,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); return g;
-}
-function coniferGeometry(){
-  const t=new THREE.CylinderGeometry(0.12,0.2,2.4,6); t.translate(0,1.2,0);
-  const c1=new THREE.ConeGeometry(1.5,3.4,8); c1.translate(0,3.2,0);
-  const c2=new THREE.ConeGeometry(1.15,3.0,8); c2.translate(0,5.2,0);
-  const c3=new THREE.ConeGeometry(0.75,2.6,8); c3.translate(0,7.0,0);
-  return mergeGeos([{geo:t,c:[0.16,0.11,0.07]},{geo:c1,c:[0.045,0.11,0.05]},{geo:c2,c:[0.05,0.125,0.055]},{geo:c3,c:[0.06,0.14,0.06]}]);
-}
-function broadleafGeometry(){
-  const t=new THREE.CylinderGeometry(0.16,0.24,3.0,6); t.translate(0,1.5,0);
-  const k=new THREE.IcosahedronGeometry(2.4,1); k.scale(1,0.8,1); k.translate(0,4.6,0);
-  return mergeGeos([{geo:t,c:[0.18,0.13,0.08]},{geo:k,c:[0.07,0.15,0.045]}]);
-}
+// Ground: grass in two tones with patches of bare earth, rock on the steep parts and along rocky shores, sand on the
+// beaches and mud in the reeds, and a dark, glossy wet band where the water laps. The noise repeats every LAND_P along
+// the bank (z wraps round a circle), so it doesn't change when the bank snaps forward.
+const BANK_NOISE_GLSL=`
+float hash3(vec3 p){ p=fract(p*0.1031); p+=dot(p,p.zyx+31.32); return fract((p.x+p.y)*p.z); }
+float vnoise3(vec3 p){ vec3 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  return mix(mix(mix(hash3(i),hash3(i+vec3(1,0,0)),f.x),mix(hash3(i+vec3(0,1,0)),hash3(i+vec3(1,1,0)),f.x),f.y),
+             mix(mix(hash3(i+vec3(0,0,1)),hash3(i+vec3(1,0,1)),f.x),mix(hash3(i+vec3(0,1,1)),hash3(i+vec3(1,1,1)),f.x),f.y),f.z); }
+float bankNoise(vec2 xz, float s){ float a=xz.y*6.2831853/${LAND_P}.0, R=${LAND_P}.0/6.2831853; return vnoise3(vec3(xz.x,cos(a)*R,sin(a)*R)*s); }`;
 const shore=new THREE.Group(); scene.add(shore);
-const landMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:1,metalness:0});
-for(const side of [-1,1]){ const m=new THREE.Mesh(landGeometry(side),landMat); shore.add(m); }
-const trees=[];
-{
-  const rnd=mulberry32(4242); const _m=new THREE.Matrix4(), _p=V3(), _q=new THREE.Quaternion(), _s=V3(), _c=new THREE.Color();
-  const make=(geo,perSide,minX,maxX,scaleLo,scaleHi,tint)=>{
-    const total=perSide*2*3; const mesh=new THREE.InstancedMesh(geo,new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.95,metalness:0}),total);
-    mesh.frustumCulled=false; let i=0;
-    for(let n=0;n<perSide;n++){
-      const side=n%2===0?1:-1; const ax=minX+rnd()*(maxX-minX); const z0=-LAND_P/2+rnd()*LAND_P;
-      const y=landH(ax,z0); if(y<1.6){ n--; continue; }
-      const sc=scaleLo+rnd()*(scaleHi-scaleLo); const rot=rnd()*Math.PI*2; const tt=0.8+rnd()*0.45;
-      for(let m=-1;m<=1;m++){
-        _p.set(side*ax,y-0.25,z0+m*LAND_P); _q.setFromAxisAngle(UP,rot); _s.set(sc,sc*(0.9+rnd()*0.2),sc);
-        _m.compose(_p,_q,_s); mesh.setMatrixAt(i,_m); _c.setRGB(tt*tint[0],tt*tint[1],tt*tint[2]); mesh.setColorAt(i,_c); i++;
-      }
-    }
-    mesh.count=i; mesh.userData.full=i; mesh.instanceMatrix.needsUpdate=true; if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
-    shore.add(mesh); trees.push(mesh); return mesh;
-  };
-  make(coniferGeometry(),900,SHORE_X+18,SHORE_X+300,0.8,1.9,[1,1,1]);
-  make(broadleafGeometry(),150,SHORE_X+14,SHORE_X+140,0.7,1.3,[1,1.05,0.95]);
+const landMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.95,metalness:0});
+const bankCheap={value:0};
+landMat.onBeforeCompile=sh=>{
+  sh.uniforms.uBankCheap=bankCheap;
+  sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute vec3 aShore; varying vec3 vShore; varying vec3 vLPos; varying float vNy;')
+    .replace('#include <begin_vertex>','#include <begin_vertex>\nvShore=aShore; vLPos=position; vNy=normal.y;');
+  sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\nvarying vec3 vShore; varying vec3 vLPos; varying float vNy; uniform float uBankCheap; float wetK;\n'+BANK_NOISE_GLSL)
+    .replace('#include <color_fragment>',`#include <color_fragment>
+      { vec2 p=vLPos.xz; float y=vLPos.y;
+        // the low setting takes one lookup; a uniform rather than a define, so switching to it compiles nothing mid-ride
+        float n1=bankNoise(p,0.05), n2, fine, bare, moss;
+        if(uBankCheap>0.5){ n2=fract(n1*3.7); fine=0.5; bare=1.0-n1; moss=n2; }
+        else { n2=bankNoise(p,0.21); fine=bankNoise(p,0.9); bare=bankNoise(p,0.024); moss=bankNoise(p,0.13); }
+        vec3 grass=mix(vec3(0.036,0.062,0.018),vec3(0.062,0.078,0.024),smoothstep(0.35,0.75,n1));
+        grass=mix(grass,vec3(0.07,0.05,0.032),smoothstep(0.66,0.8,bare)*0.85);           // bare earth
+        vec3 sand=vec3(0.21,0.18,0.12)*(0.85+0.3*n2), mud=vec3(0.05,0.045,0.03), rock=vec3(0.085,0.08,0.07)*(0.55+0.9*n2*fine);
+        rock=mix(rock,vec3(0.035,0.048,0.022),smoothstep(0.5,0.8,moss)*0.65);                // moss and lichen
+        float low=1.0-smoothstep(0.4,1.6,y);                                                             // the strip by the water
+        vec3 edge=sand*vShore.x+rock*vShore.y+mix(mud,grass*0.8,0.35)*vShore.z;
+        vec3 c=mix(grass,edge,low*(0.55+0.45*smoothstep(0.3,0.6,n2)));
+        c=mix(c,rock,smoothstep(0.86,0.74,vNy)*0.85);                                                    // steep ground is rock
+        c=mix(c,rock,vShore.y*(1.0-smoothstep(1.5,3.5,y)));                                             // and so is a rocky shore
+        wetK=smoothstep(0.16,0.02,y);                                                                    // the wet band where it laps
+        c*=mix(1.0,0.5,wetK); c*=0.82+0.36*fine;
+        diffuseColor.rgb=c; }`)
+    .replace('#include <roughnessmap_fragment>','#include <roughnessmap_fragment>\nroughnessFactor=mix(roughnessFactor,0.4,wetK);')
+    // dry grass and earth hardly mirror anything, even at a low angle; only the wet band does
+    .replace('#include <lights_fragment_end>','#include <lights_fragment_end>\nreflectedLight.indirectSpecular*=mix(0.2,1.0,wetK); reflectedLight.directSpecular*=mix(0.35,1.0,wetK);');
+};
+const landParts=[];
+{ const half=(SHORE_SPAN-1)/2; for(const side of [-1,1]) for(let m=-half;m<=half;m++){ const g=new THREE.Mesh(landGeometry(side,m),landMat); g.userData.zmid=m*LAND_P; landParts.push(g); shore.add(g); } }
+// Trees: spruce, pine, a broadleaf (oak-like, and small for the bushes along the forest edge), birch and willow. Each is
+// a trunk and limbs in bark with its foliage on alpha-tested cards, from one atlas painted here at boot. Card normals
+// point out from the crown, so a tree lights as a soft rounded mass, and the vertex colour darkens the inside and the
+// underside of the crown in place of real occlusion. Leaves glow a little with the sun behind them and sway in the
+// wind. Trees are instanced per kind in chunks along each bank, so the ones off-screen aren't drawn, and a chunk far
+// down the course swaps to a cheaper version with fewer, larger cards.
+const ATLAS_W=2048, ATLAS_H=1024, CELL=512;
+const ATLAS_CELL={spruce:0,pine:1,broadleaf:2,birch:3,willow:4,reed:5,bark:7};
+function paintFoliageAtlas(){
+  // colour and coverage are painted on two canvases and put together by hand, so the colour runs on under the
+  // transparent parts and the smaller mip levels don't darken the edges of every leaf
+  const col=document.createElement('canvas'), alp=document.createElement('canvas'); col.width=alp.width=ATLAS_W; col.height=alp.height=ATLAS_H;
+  const C=col.getContext('2d'), A=alp.getContext('2d'); A.fillStyle='#000'; A.fillRect(0,0,ATLAS_W,ATLAS_H);
+  const rnd=mulberry32(9001), TAU=Math.PI*2, hsl=(h,s,l)=>`hsl(${h},${s}%,${l}%)`;
+  const both=(fill,draw)=>{ C.fillStyle=C.strokeStyle=fill; draw(C); A.fillStyle=A.strokeStyle='#fff'; draw(A); };
+  const ell=(x,y,rx,ry,rot,c)=>both(c,X=>{ X.beginPath(); X.ellipse(x,y,rx,ry,rot,0,TAU); X.fill(); });
+  const line=(x0,y0,x1,y1,w,c)=>both(c,X=>{ X.lineWidth=w; X.lineCap='round'; X.beginPath(); X.moveTo(x0,y0); X.lineTo(x1,y1); X.stroke(); });
+  const blade=(x0,y0,x1,y1,w,c)=>both(c,X=>{ const mx=(x0+x1)/2+(x1-x0)*0.15, my=(y0+y1)/2; X.beginPath(); X.moveTo(x0-w/2,y0); X.quadraticCurveTo(mx-w*0.3,my,x1,y1); X.quadraticCurveTo(mx+w*0.3,my,x0+w/2,y0); X.closePath(); X.fill(); });
+  const cell=(i,bg,fn)=>{ const x0=(i%4)*CELL, y0=Math.floor(i/4)*CELL;
+    for(const X of [C,A]){ X.save(); X.beginPath(); X.rect(x0,y0,CELL,CELL); X.clip(); X.translate(x0,y0); }
+    C.fillStyle=bg; C.fillRect(0,0,CELL,CELL); fn(); C.restore(); A.restore(); };
+  // spruce: a frond along the cell, trunk end on the left, drooping a little to the tip; needles on every twig
+  cell(ATLAS_CELL.spruce,hsl(110,30,14),()=>{
+    const pts=[]; for(let i=0;i<=20;i++){ const t=i/20; pts.push([16+t*480,226+t*t*60]); }
+    for(let i=0;i<20;i++) line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1],7-5*i/20,hsl(25,30,16));
+    for(let i=1;i<20;i++){ const t=i/20, [x,y]=pts[i], len=(1-t*0.55)*150*(0.8+0.4*rnd());
+      for(const sd of [-1,1]){ const a=sd*(0.75+0.35*rnd())+0.25, ex=x+Math.cos(a)*len*0.8, ey=y+Math.sin(a)*len*0.8+len*0.15;
+        line(x,y,ex,ey,2.5,hsl(25,25,18)); const n=Math.floor(len/4.5), ang=Math.atan2(ey-y,ex-x);
+        for(let j=0;j<n;j++){ const s=j/n, px=x+(ex-x)*s, py=y+(ey-y)*s;
+          for(const nd of [-1,1]){ const na=ang+nd*(0.8+0.5*rnd()), nl=(11+8*rnd())*(1-s*0.4);
+            line(px,py,px+Math.cos(na)*nl,py+Math.sin(na)*nl,2.3,hsl(105+rnd()*25,30+rnd()*15,13+rnd()*13+s*7)); } } } }
+  });
+  // pine: tufts of long needles in a loose cluster
+  cell(ATLAS_CELL.pine,hsl(105,30,13),()=>{
+    for(let k=0;k<11;k++){ const cx=80+rnd()*350, cy=90+rnd()*330;
+      for(let j=0;j<70;j++){ const a=rnd()*TAU, l=34+rnd()*58; line(cx,cy,cx+Math.cos(a)*l,cy+Math.sin(a)*l*0.85-l*0.15,2.4,hsl(95+rnd()*28,32+rnd()*16,12+rnd()*13)); }
+      ell(cx,cy,9,9,0,hsl(28,30,18)); }
+  });
+  // broadleaf: a round cluster of overlapping leaves, lighter on top where the sun gets in
+  cell(ATLAS_CELL.broadleaf,hsl(100,45,11),()=>{
+    const lobes=[]; for(let i=0;i<6;i++) lobes.push([256+(rnd()-0.5)*230,256+(rnd()-0.5)*210,80+rnd()*85]);   // lobed, not a disc
+    for(let j=0;j<1400;j++){ const L=lobes[j%6], r=Math.sqrt(rnd())*L[2], a=rnd()*TAU, x=L[0]+Math.cos(a)*r, y=L[1]+Math.sin(a)*r*0.9, l=16+rnd()*14;
+      if(Math.hypot(x-256,y-256)>246) continue;
+      ell(x,y,l*0.55,l*0.3,rnd()*Math.PI,hsl(92+rnd()*30,42+rnd()*22,8+rnd()*11+(256-y)/45)); }
+  });
+  // birch: smaller, lighter leaves, more broken at the edge
+  cell(ATLAS_CELL.birch,hsl(85,42,17),()=>{
+    const lobes=[]; for(let i=0;i<7;i++) lobes.push([256+(rnd()-0.5)*250,256+(rnd()-0.5)*250,60+rnd()*70]);
+    for(let j=0;j<1100;j++){ const L=lobes[j%7], r=Math.pow(rnd(),0.6)*L[2], a=rnd()*TAU; if(rnd()<0.3*r/L[2])continue;
+      const x=L[0]+Math.cos(a)*r, y=L[1]+Math.sin(a)*r, l=12+rnd()*9; if(Math.hypot(x-256,y-256)>246) continue; ell(x,y,l*0.5,l*0.36,rnd()*Math.PI,hsl(80+rnd()*26,44+rnd()*16,14+rnd()*14+(256-y)/50)); }
+  });
+  // willow: strands hanging from the top edge, narrow leaves along them
+  cell(ATLAS_CELL.willow,hsl(80,38,19),()=>{
+    for(let s=0;s<30;s++){ let x=14+rnd()*484, y=0; const len=170+rnd()*300, bend=(rnd()-0.5)*5;
+      for(let j=0;j<len;j+=7){ const nx=x+Math.sin(j*0.012+s)*bend*0.4, ny=y+7; line(x,y,nx,ny,1.6,hsl(60,28,26));
+        for(const sd of [-1,1]) if(rnd()<0.7) ell(x+sd*4.5,y+3,6.5,1.9,sd*1.15+(rnd()-0.5)*0.4,hsl(75+rnd()*26,40+rnd()*15,18+rnd()*13));
+        x=nx; y=ny; } }
+  });
+  // reeds: blades from the bottom edge, some gone to straw, a few seed heads
+  cell(ATLAS_CELL.reed,hsl(75,30,28),()=>{
+    for(let s=0;s<80;s++){ const x0=24+rnd()*464, h=230+rnd()*270, lean=(rnd()-0.5)*130, w=5+rnd()*5;
+      blade(x0,CELL+4,x0+lean,CELL-h,w,rnd()<0.22?hsl(45,32,42+rnd()*12):hsl(78+rnd()*22,34,22+rnd()*14));
+      if(rnd()<0.14) ell(x0+lean*0.82,CELL-h*0.86,5,20,Math.atan2(lean,h),hsl(25,40,20)); }
+  });
+  // bark: brown furrowed bark on the left half, birch on the right (white with dark marks)
+  cell(ATLAS_CELL.bark,'#3a2e24',()=>{
+    both('#fff',X=>{ if(X===A) X.fillRect(0,0,CELL,CELL); });
+    for(let j=0;j<500;j++){ const x=rnd()*250, y=rnd()*CELL; line(x,y,x+(rnd()-0.5)*4,y+18+rnd()*40,2+rnd()*3,hsl(25,22,10+rnd()*17)); }
+    C.fillStyle='#d9d5ca'; C.fillRect(262,0,250,CELL);
+    for(let j=0;j<70;j++){ const x=262+rnd()*250, y=rnd()*CELL; ell(x,y,8+rnd()*22,1.5+rnd()*3,0,'#2a2622'); }
+  });
+  const cd=C.getImageData(0,0,ATLAS_W,ATLAS_H).data, ad=A.getImageData(0,0,ATLAS_W,ATLAS_H).data, out=new Uint8Array(ATLAS_W*ATLAS_H*4);
+  for(let y=0;y<ATLAS_H;y++){ const s=(ATLAS_H-1-y)*ATLAS_W*4, d=y*ATLAS_W*4;   // flipped, so v runs up the texture
+    for(let x=0;x<ATLAS_W*4;x+=4){ out[d+x]=cd[s+x]; out[d+x+1]=cd[s+x+1]; out[d+x+2]=cd[s+x+2]; out[d+x+3]=ad[s+x]; } }
+  const t=new THREE.DataTexture(out,ATLAS_W,ATLAS_H,THREE.RGBAFormat);
+  t.colorSpace=THREE.SRGBColorSpace; t.generateMipmaps=true; t.minFilter=THREE.LinearMipmapLinearFilter; t.magFilter=THREE.LinearFilter;
+  t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy()); t.needsUpdate=true; return t;
 }
-function setTreeDensity(f){ for(const m of trees)m.count=Math.round(m.userData.full*f); }
-function makeRidge(radius,n,baseH,varH,color,seed){
+const foliageAtlas=paintFoliageAtlas();
+// u, v inside an atlas cell (v up) to texture coordinates, kept off the cell's edges so mips don't bleed between cells
+function atlasUV(cell,u,v){ const m=0.015; u=m+u*(1-2*m); v=m+v*(1-2*m); return [((cell%4)+u)/4, (1-Math.floor(cell/4)+v)/2]; }
+
+// A small mesh builder: positions, normals, atlas uvs, a grey vertex colour for occlusion, and aSway (0 at the base,
+// 1 at the tips; negative on bark, so the shader can tell leaves from wood)
+function treeBuilder(crown,lod=2){   // lod tags the geometry for the near/far hand-over: 0 near, 1 far, 2 always drawn
+  const b={p:[],n:[],uv:[],c:[],s:[],idx:[],crown};
+  b.vert=(P,N,uv,ao,sw)=>{ b.p.push(P.x,P.y,P.z); b.n.push(N.x,N.y,N.z); b.uv.push(uv[0],uv[1]); b.c.push(ao,ao,ao); b.s.push(sw); return b.p.length/3-1; };
+  b.leafAO=P=>{ const r=Math.hypot(P.x-crown.c.x,P.z-crown.c.z)/crown.r, h=clamp((P.y-crown.y0)/(crown.y1-crown.y0),0,1); return clamp(0.12+0.5*Math.min(r,1.1)+0.4*h,0.12,1.0); };
+  b.leafSway=P=>clamp(0.2+0.5*Math.hypot(P.x,P.z)/crown.r+0.3*P.y/crown.y1,0,1);
+  // a card: centre, the axis its u runs along (length L), the axis its v runs along (width W)
+  b.card=(c,ax,ay,L,W,cell)=>{ const k=b.p.length/3;
+    for(const [u,v] of [[0,0],[1,0],[1,1],[0,1]]){
+      const P=c.clone().addScaledVector(ax,(u-0.5)*L).addScaledVector(ay,(v-0.5)*W);
+      const N=P.clone().sub(crown.c).normalize().multiplyScalar(0.75); N.y+=0.35; N.normalize();
+      b.vert(P,N,atlasUV(cell,u,v),b.leafAO(P),b.leafSway(P)); }
+    b.idx.push(k,k+1,k+2,k,k+2,k+3); };
+  // a clump: crossed cards round a point, turned at random
+  b.clump=(c,size,cell,n,rnd)=>{ const a0=rnd()*Math.PI;
+    for(let i=0;i<n;i++){ const a=a0+i*Math.PI/n, tilt=(rnd()-0.5)*0.5;
+      const ax=V3(Math.cos(a),tilt,Math.sin(a)).normalize(), ay=V3(-Math.sin(a)*0.25,1,Math.cos(a)*0.25).normalize();
+      if(n>2 && i===n-1){ ay.set(-Math.sin(a),0,Math.cos(a)); ax.set(Math.cos(a),0.15,Math.sin(a)).normalize(); }   // one lies flat-ish, for the view from above
+      b.card(c,ax,ay,size*(0.9+0.2*rnd()),size*(0.9+0.2*rnd()),cell); } };
+  // a tapered tube of bark from a to b
+  b.limb=(a,bp,r0,r1,sides,birch)=>{ const d=bp.clone().sub(a), len=d.length(); d.normalize();
+    const t1=Math.abs(d.y)<0.9?V3(0,1,0):V3(1,0,0), u=V3().crossVectors(d,t1).normalize(), w=V3().crossVectors(d,u).normalize();
+    const k=b.p.length/3, u0=birch?0.53:0.02, u1=birch?0.98:0.47;
+    for(let ring=0;ring<2;ring++){ const P0=ring?bp:a, r=ring?r1:r0, y=P0.y;
+      for(let i=0;i<=sides;i++){ const t=i/sides*Math.PI*2, N=u.clone().multiplyScalar(Math.cos(t)).addScaledVector(w,Math.sin(t));
+        b.vert(P0.clone().addScaledVector(N,r),N,atlasUV(ATLAS_CELL.bark,u0+(u1-u0)*i/sides,ring?Math.min(1,len/8):0),0.5+0.35*clamp(y/crown.y1,0,1),-0.001-0.25*clamp(y/crown.y1,0,1)); } }
+    for(let i=0;i<sides;i++){ const a0=k+i, a1=k+i+1, b0=k+sides+1+i, b1=b0+1; b.idx.push(a0,b0,a1,a1,b0,b1); } };
+  b.geometry=()=>{ const g=new THREE.BufferGeometry();
+    g.setAttribute('position',new THREE.Float32BufferAttribute(b.p,3)); g.setAttribute('normal',new THREE.Float32BufferAttribute(b.n,3));
+    g.setAttribute('uv',new THREE.Float32BufferAttribute(b.uv,2)); g.setAttribute('color',new THREE.Float32BufferAttribute(b.c,3));
+    g.setAttribute('aSway',new THREE.Float32BufferAttribute(b.s,1)); g.setAttribute('aLod',new THREE.Float32BufferAttribute(new Array(b.s.length).fill(lod),1));
+    g.setIndex(b.idx); g.computeBoundingSphere(); return g; };
+  return b;
+}
+const TREE_KINDS=['spruce','pine','broadleaf','birch','willow'];
+// one kind of tree at a level of detail (0 near, 1 far), shaped by seed
+function treeGeometry(kind,lod,seed){
+  const rnd=mulberry32(seed*7919+lod*31+TREE_KINDS.indexOf(kind)*104729), far=lod>0;
+  if(kind==='spruce'){
+    const H=11, b=treeBuilder({c:V3(0,4.5,0),r:2.9,y0:1.2,y1:H},lod);
+    b.limb(V3(0,-0.4,0),V3(0,H*0.96,0),0.24,0.03,far?4:6,false);
+    const levels=far?5:9, per=far?4:6;
+    for(let l=0;l<levels;l++){ const t=(l+0.5)/levels, y=1.5+t*(H*0.9-1.5), L=(0.4+2.6*Math.pow(1-t,0.95))*(far?1.2:1), rot=rnd()*6.283;
+      for(let k=0;k<per;k++){ const a=rot+k/per*6.283+(rnd()-0.5)*0.4, d=V3(Math.cos(a),-0.3-0.15*(1-t),Math.sin(a)).normalize(), side=V3(-Math.sin(a),0,Math.cos(a));
+        const c=V3(0,y,0).addScaledVector(d,L*0.5), w=L*(far?0.8:0.62);
+        if(!far) b.card(c,d,side.clone().applyAxisAngle(d,0.45),L,w,ATLAS_CELL.spruce);         // lying out from the trunk
+        b.card(c,d,V3().crossVectors(d,side).normalize().negate(),L,w*0.8,ATLAS_CELL.spruce); } }   // and hanging, for the side view
+    for(const ay of [V3(1,0,0),V3(0,0,1)]) b.card(V3(0,H*0.93,0),V3(0,1,0),ay,2.2,0.9,ATLAS_CELL.spruce);
+    return b.geometry();
+  }
+  if(kind==='pine'){
+    const H=15, b=treeBuilder({c:V3(0,H*0.82,0),r:3.2,y0:H*0.62,y1:H},lod);
+    const lean=V3((rnd()-0.5)*0.8,0,(rnd()-0.5)*0.8), mid=V3(lean.x*0.4,H*0.5,lean.z*0.4), top=V3(lean.x,H*0.97,lean.z);
+    b.limb(V3(0,-0.4,0),mid,0.3,0.2,far?4:6,false); b.limb(mid,top,0.2,0.05,far?4:6,false);
+    const limbs=far?4:7;
+    for(let i=0;i<limbs;i++){ const t=i/limbs, y=H*(0.64+0.28*t), a=rnd()*6.283, L=(2.0+1.4*rnd())*(1-0.4*t);
+      const base=V3(lean.x*y/H,y,lean.z*y/H), end=base.clone().add(V3(Math.cos(a)*L,0.6+0.8*rnd(),Math.sin(a)*L));
+      if(!far) b.limb(base,end,0.09,0.04,4,false);
+      b.clump(end,1.9+0.6*rnd(),ATLAS_CELL.pine,far?2:3,rnd);
+      if(!far) b.clump(base.clone().lerp(end,0.55).add(V3(0,0.3,0)),1.5+0.5*rnd(),ATLAS_CELL.pine,2,rnd); }
+    b.clump(top.clone().add(V3(0,0.2,0)),2.2,ATLAS_CELL.pine,far?2:3,rnd);
+    return b.geometry();
+  }
+  if(kind==='broadleaf'||kind==='birch'){
+    const birch=kind==='birch', H=birch?13:15, cy=H*(birch?0.64:0.6), R=birch?2.4:5.0, Ry=birch?4.0:4.4;
+    const b=treeBuilder({c:V3(0,cy,0),r:R,y0:cy-Ry,y1:cy+Ry},lod);
+    const lean=birch?V3((rnd()-0.5)*1.2,0,(rnd()-0.5)*1.2):V3();
+    const fork=V3(lean.x*0.5,H*(birch?0.5:0.42),lean.z*0.5);
+    b.limb(V3(0,-0.4,0),fork,birch?0.17:0.38,birch?0.12:0.28,far?4:6,birch);
+    const limbs=birch?2:4;
+    for(let i=0;i<limbs;i++){ const a=i/limbs*6.283+rnd(), end=V3(Math.cos(a)*R*0.45+lean.x,cy+(rnd()-0.2)*Ry*0.6,Math.sin(a)*R*0.45+lean.z);
+      if(!far) b.limb(fork,end,birch?0.1:0.22,birch?0.05:0.1,5,birch); }
+    const n=far?(birch?5:7):(birch?10:15), size=birch?2.6:4.2;
+    for(let i=0;i<n;i++){ const u=rnd()*6.283, v=Math.acos(1-1.75*rnd()), rr=i<2&&!far?0.35:0.62+0.38*rnd();   // clumps over the upper crown, a couple inside
+      const c=V3(Math.sin(v)*Math.cos(u)*R*rr+lean.x,cy+Math.cos(v)*Ry*rr,Math.sin(v)*Math.sin(u)*R*rr+lean.z);
+      b.clump(c,size*(far?1.3:1)*(0.85+0.3*rnd()),birch?ATLAS_CELL.birch:ATLAS_CELL.broadleaf,far?2:3,rnd); }
+    return b.geometry();
+  }
+  // willow: a short thick trunk, a low dome and a curtain of hanging strands
+  const H=8, cy=H*0.72, R=4.4, b=treeBuilder({c:V3(0,cy,0),r:R,y0:1,y1:H},lod);
+  const lean=V3((rnd()-0.5)*1.4,0,(rnd()-0.5)*1.4), fork=V3(lean.x*0.6,H*0.42,lean.z*0.6);
+  b.limb(V3(0,-0.4,0),fork,0.45,0.3,far?4:6,false);
+  for(let i=0;i<3;i++){ const a=i/3*6.283+rnd(); b.limb(fork,V3(Math.cos(a)*2.4+lean.x,cy+0.6,Math.sin(a)*2.4+lean.z),0.22,0.09,far?3:5,false); }
+  for(let i=0,n=far?4:7;i<n;i++){ const a=rnd()*6.283, r=R*0.55*Math.sqrt(rnd()); b.clump(V3(Math.cos(a)*r+lean.x,cy+0.9+rnd()*0.8,Math.sin(a)*r+lean.z),3.0,ATLAS_CELL.birch,far?2:3,rnd); }
+  for(const ring of far?[R*0.85]:[R*0.92,R*0.62]){ const n=far?9:16, a0=rnd()*6.283;
+    for(let i=0;i<n;i++){ const a=a0+i/n*6.283, L=3.6+1.4*rnd(), top=cy+1.2;
+      const c=V3(Math.cos(a)*ring+lean.x,top-L/2,Math.sin(a)*ring+lean.z);
+      b.card(c,V3(-Math.sin(a),0,Math.cos(a)),V3(Math.cos(a)*0.12,1,Math.sin(a)*0.12).normalize(),1.8,L,ATLAS_CELL.willow); } }
+  return b.geometry();
+}
+const TREE_GEO={}; for(const k of TREE_KINDS)TREE_GEO[k]=[treeGeometry(k,0,1),treeGeometry(k,1,1)];
+TREE_GEO.bush=TREE_GEO.broadleaf;   // bushes are small broadleaves sunk in the ground, in chunks of their own so low can leave them out
+const treeUniforms={uTime:{value:0},uLodFar:{value:350},uLodBand:{value:70},uLodOn:{value:1}};
+const treeMat=new THREE.MeshStandardMaterial({map:foliageAtlas,vertexColors:true,alphaTest:0.42,alphaToCoverage:true,side:THREE.DoubleSide,roughness:0.88,metalness:0});
+treeMat.onBeforeCompile=sh=>{
+  Object.assign(sh.uniforms,treeUniforms);
+  sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute float aSway; attribute float aLod; uniform float uTime; uniform float uLodFar; uniform float uLodBand; uniform float uLodOn; varying float vLeaf; varying float vLodCut; varying float vLodSide;')
+    .replace('#include <begin_vertex>',`#include <begin_vertex>
+      vLeaf=step(0.0,aSway);
+      vec3 wp0=(modelMatrix*instanceMatrix*vec4(0.0,0.0,0.0,1.0)).xyz;   // the tree's own base
+      { float s=abs(aSway); s*=s*0.12;
+        // each tree its own phase, from where it stands; z wraps every period (a whole number of turns), so the phase
+        // stays small however far down the course, and matches across the forward snap
+        float ph=uTime*1.3+wp0.x*0.21+fract(wp0.z/${LAND_P}.0)*${(2*Math.PI*153).toFixed(4)}+transformed.y*0.35;
+        transformed.x+=s*sin(ph); transformed.z+=s*0.6*cos(ph*0.83+1.7); }
+      // near and far versions of a tree hand over across a band of distance, each tree on its own, dithered
+      vLodCut=uLodOn>0.5?smoothstep(uLodFar-0.5*uLodBand,uLodFar+0.5*uLodBand,abs(wp0.z-cameraPosition.z)):1.0; vLodSide=aLod;`);
+  sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\nvarying float vLeaf; varying float vLodCut; varying float vLodSide;')
+    .replace('#include <clipping_planes_fragment>',`#include <clipping_planes_fragment>
+      if(vLodSide<1.5){ float ign=fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(0.06711056,0.00583715))));
+        if(vLodSide<0.5?ign<vLodCut:ign>=vLodCut) discard; }`)
+    // leaf normals come from the crown, the same both sides of a card
+    .replace('#include <normal_fragment_begin>',THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;','normal *= mix(faceDirection,1.0,vLeaf);'))
+    // smaller mips average the leaves away; hold the coverage up so a far tree doesn't go thin
+    .replace('#include <alphatest_fragment>',`{ vec2 tc=vMapUv*vec2(${ATLAS_W}.0,${ATLAS_H}.0); vec2 dx=dFdx(tc), dy=dFdy(tc);
+        float mip=max(0.0,0.5*log2(max(dot(dx,dx),dot(dy,dy)))); diffuseColor.a*=1.0+0.18*mip; }
+      #include <alphatest_fragment>`)
+    // light through the leaves with the sun behind them, and a little wrap so a crown's shady side isn't flat
+    .replace('#include <lights_fragment_end>',`#include <lights_fragment_end>
+      #if NUM_DIR_LIGHTS > 0
+        { float tr=pow(max(dot(-geometryViewDir,directionalLights[0].direction),0.0),4.0);
+          reflectedLight.directDiffuse+=vLeaf*diffuseColor.rgb*directionalLights[0].color*(1.3*tr+0.12)/PI; }
+      #endif
+      reflectedLight.directSpecular*=1.0-0.8*vLeaf; reflectedLight.indirectSpecular*=1.0-0.9*vLeaf;`);
+};
+const TREE_CHUNK=450;   // how far out the cheaper trees start, and where trees stop, are per quality setting
+const trees=[];
+// Planting: one period of trees, copied along the whole bank, so it repeats exactly when it snaps forward.
+// A noise field gathers them into stands with clearings between; species follow the distance from the water (willow
+// and birch at the edge, conifers behind) and trees get taller further back. Bushes line the forest edge.
+{
+  const rnd=mulberry32(4242), k=2*Math.PI/LAND_P, list=[];
+  const stand=(ax,z)=>0.5+0.3*Math.sin(z*k*7+ax*0.021+1.3)+0.22*Math.sin(z*k*17-ax*0.047+0.4)*Math.sin(z*k*3+ax*0.011+2.1);
+  const pick=(d,r)=>{ if(d<22){ return r<0.3?'willow':r<0.58?'birch':r<0.86?'broadleaf':'spruce'; }
+    if(d<70){ return r<0.36?'broadleaf':r<0.55?'birch':r<0.85?'spruce':'pine'; } return r<0.55?'spruce':r<0.82?'pine':'broadleaf'; };
+  let nTrees=0, nBush=0;
+  for(let n=0;n<80000 && (nTrees<2600||nBush<900);n++){
+    const side=n%2===0?1:-1, d=8+Math.pow(rnd(),1.8)*300, ax=SHORE_X+d, z0=-LAND_P/2+rnd()*LAND_P, y=landH(side*ax,z0), s=stand(ax,z0), r=rnd();
+    const bush=nBush<900 && d<90 && s>0.22 && r<0.32;
+    if(y<(bush?0.5:0.7)) continue;
+    if(!bush && (nTrees>=2600 || rnd()>clamp((s-0.32)/0.22,0,1))) continue;
+    if(bush && nBush>=900) continue;
+    const kind=bush?'bush':pick(d-8,rnd()), grow=0.85+0.4*clamp(d/220,0,1);
+    const sc=bush?0.2+0.16*rnd():(0.8+0.5*rnd())*grow, tt=(bush?0.62:0.72)+0.3*rnd(), dark=kind==='spruce'?0.85:1;
+    list.push({kind,side,ax,z0,y,sc,sink:bush?6.5*sc:0.3,sy:bush?0.75:0.92+0.16*rnd(),rot:rnd()*6.283,tint:[tt*dark*(0.94+0.12*rnd()),tt*dark,tt*dark*(0.88+0.18*rnd())],rank:rnd()});
+    if(bush)nBush++; else nTrees++;
+  }
+  // into chunks: per kind, per TREE_CHUNK of z (both banks in one, since looking down the course sees both), ordered by rank so thinning keeps the same trees in every copy
+  const groups=new Map(), nChunk=Math.round(LAND_P*SHORE_SPAN/TREE_CHUNK), half=(SHORE_SPAN-1)/2;
+  for(const t of list) for(let m=-half;m<=half;m++){ const z=t.z0+m*LAND_P, ci=clamp(Math.floor((z+LAND_P*SHORE_SPAN/2)/TREE_CHUNK),0,nChunk-1), key=`${t.kind}|${ci}`;
+    if(!groups.has(key))groups.set(key,[]); groups.get(key).push({t,z}); }
+  const _m=new THREE.Matrix4(), _p=V3(), _q=new THREE.Quaternion(), _s=V3(), _c=new THREE.Color();
+  for(const [key,g] of groups){ const [kind,ci]=key.split('|');
+    g.sort((a,b)=>a.t.rank-b.t.rank);
+    const mesh=new THREE.InstancedMesh(TREE_GEO[kind][0],treeMat,g.length);
+    g.forEach(({t,z},i)=>{ _p.set(t.side*t.ax,t.y-t.sink,z); _q.setFromAxisAngle(UP,t.rot); _s.set(t.sc,t.sc*t.sy,t.sc); _m.compose(_p,_q,_s); mesh.setMatrixAt(i,_m); mesh.setColorAt(i,_c.setRGB(...t.tint)); });
+    mesh.instanceMatrix.needsUpdate=true; mesh.instanceColor.needsUpdate=true;
+    mesh.computeBoundingSphere(); mesh.frustumCulled=true;
+    const far=new THREE.InstancedMesh(TREE_GEO[kind][1],treeMat,g.length);   // the cheaper trees, the same instances
+    far.instanceMatrix=mesh.instanceMatrix; far.instanceColor=mesh.instanceColor; far.boundingSphere=mesh.boundingSphere.clone(); far.frustumCulled=true;
+    mesh.userData={kind,side:0,chunk:+ci,full:g.length,zmid:-LAND_P*SHORE_SPAN/2+(+ci+0.5)*TREE_CHUNK,far,d:0};
+    shore.add(mesh); shore.add(far); trees.push(mesh); }
+}
+function setTreeDensity(f){ for(const m of trees)m.count=m.userData.far.count=Math.round(m.userData.full*f); }
+// the water's reflection is blurred anyway: draw it with the cheap trees only (and on medium only the nearer ones), then
+// put everything back
+function treesFar(on){ const r=QUALITY[quality].reflTrees; treeUniforms.uLodOn.value=on?0:1;
+  for(const m of trees){ const f=m.userData.far;
+    if(on){ m.userData.was=[m.visible,f.visible]; m.visible=false; f.visible=m.userData.d<r; } else [m.visible,f.visible]=m.userData.was; } }
+// ---------- props on the banks: rocks, reeds, jetties with boats tied up, a boathouse ----------
+// One period's worth, copied along the whole bank like the trees. Everything but the reeds is one merged mesh; rocks
+// and reeds are instanced. The low quality setting leaves them out.
+function mergeParts(parts){ // [{g, c:[r,g,b]}] -> one geometry with position, normal and colour
+  const geos=parts.map(p=>{ const g=p.g.index?p.g.toNonIndexed():p.g; if(!g.attributes.normal)g.computeVertexNormals(); return g; });
+  let n=0; for(const g of geos)n+=g.attributes.position.count;
+  const pos=new Float32Array(n*3), nor=new Float32Array(n*3), col=new Float32Array(n*3); let o=0;
+  geos.forEach((g,i)=>{ const c=g.attributes.position.count, [r,gg,b]=parts[i].c; pos.set(g.attributes.position.array,o*3); nor.set(g.attributes.normal.array,o*3);
+    for(let k=0;k<c;k++){ col[(o+k)*3]=r; col[(o+k)*3+1]=gg; col[(o+k)*3+2]=b; } o+=c; });
+  const m=new THREE.BufferGeometry(); m.setAttribute('position',new THREE.BufferAttribute(pos,3)); m.setAttribute('normal',new THREE.BufferAttribute(nor,3)); m.setAttribute('color',new THREE.BufferAttribute(col,3)); m.computeBoundingSphere(); return m;
+}
+function concatGeos(list){ // same attributes in each, non-indexed
+  const out=new THREE.BufferGeometry();
+  for(const name of ['position','normal','color']){ const n=list.reduce((s,g)=>s+g.attributes[name].array.length,0), a=new Float32Array(n); let o=0;
+    for(const g of list){ a.set(g.attributes[name].array,o); o+=g.attributes[name].array.length; } out.setAttribute(name,new THREE.BufferAttribute(a,3)); }
+  out.computeBoundingSphere(); return out;
+}
+const propMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.85,metalness:0});
+function buildProps(){
+  const group=new THREE.Group(), rnd=mulberry32(606), half=(SHORE_SPAN-1)/2, parts=[];
+  const box=(w,h,d,M,c)=>parts.push({g:new THREE.BoxGeometry(w,h,d).applyMatrix4(M),c});
+  const cyl=(r,h,M,c)=>parts.push({g:new THREE.CylinderGeometry(r,r,h,6).applyMatrix4(M),c});
+  const at=(x,y,z,ry=0,rz=0)=>new THREE.Matrix4().compose(V3(x,y,z),new THREE.Quaternion().setFromEuler(new THREE.Euler(0,ry,rz)),V3(1,1,1));
+  const timber=()=>{ const t=0.8+0.4*rnd(); return [0.15*t,0.11*t,0.075*t]; };
+  // a frame for a prop at the waterline: u runs out over the water, w along the bank
+  const frame=(side,z)=>{ const x=side*waterlineX(side,z); return (u,y,w)=>V3(x-side*u,y,z+w); };
+  // where along the bank to put a prop: the nearest z to the one asked for that isn't a rocky stretch
+  const spot=(side,z)=>{ for(let d=0;d<200;d+=5) for(const s of [1,-1]){ const zz=z+s*d; if(shoreType(side,zz).rock<0.25) return zz; } return z; };
+  // a small motorboat: lofted from a plan outline, white with a navy deck and a black outboard
+  const boat=(P,yaw)=>{
+    const sh=new THREE.Shape(); sh.moveTo(-2.1,-0.8); sh.lineTo(1.7,-0.8); sh.quadraticCurveTo(2.7,-0.5,2.9,0); sh.quadraticCurveTo(2.7,0.5,1.7,0.8); sh.lineTo(-2.1,0.8); sh.closePath();
+    const hull=new THREE.ExtrudeGeometry(sh,{depth:0.7,bevelEnabled:true,bevelSize:0.08,bevelThickness:0.08,bevelSegments:1,curveSegments:6}); hull.rotateX(-Math.PI/2);
+    const deck=new THREE.ExtrudeGeometry(sh,{depth:0.06,bevelEnabled:false,curveSegments:6}); deck.rotateX(-Math.PI/2); deck.scale(0.86,1,0.82); deck.translate(0,0.72,0);
+    const M=new THREE.Matrix4().compose(P,new THREE.Quaternion().setFromAxisAngle(UP,yaw),V3(1,1,1));
+    const navy=rnd()<0.5; parts.push({g:hull.applyMatrix4(M),c:navy?[0.02,0.025,0.06]:[0.7,0.7,0.67]},{g:deck.applyMatrix4(M),c:navy?[0.62,0.6,0.55]:[0.03,0.04,0.09]});
+    box(0.35,0.7,0.3,new THREE.Matrix4().multiplyMatrices(M,at(-2.25,0.75,0)),[0.02,0.02,0.02]);
+    box(0.05,0.35,1.1,new THREE.Matrix4().multiplyMatrices(M,at(0.6,0.95,0,0,-0.4)),[0.05,0.06,0.07]);
+  };
+  // a timber jetty on posts, running out from the bank, a boat tied alongside the end of some
+  const jetty=(side,z,len,withBoat)=>{ const F=frame(side,z), yaw=side>0?Math.PI:0, deckY=0.55;
+    for(let u=-3;u<len;u+=0.27){ const c=timber(), p=F(u,deckY,0); box(0.22,0.05,2.0,at(p.x,p.y,p.z,0,0),c); }
+    for(const w of [-0.85,0.85]){ const p=F((len-3)/2,deckY-0.12,w); box(Math.abs(len+3),0.12,0.12,at(p.x,p.y,p.z),[0.09,0.07,0.05]); }
+    for(let u=-2;u<=len;u+=2.4) for(const w of [-0.95,0.95]){ const p=F(u,deckY-1.4,w); cyl(0.11,2.9,at(p.x,p.y,p.z),[0.07,0.055,0.04]); }
+    if(withBoat){ const p=F(len-2.6,-0.3,2.1); boat(p,yaw+(rnd()-0.5)*0.08); }   // bow out over the water
+  };
+  // a boathouse: dark timber, open to the water, its front half on posts
+  const boathouse=(side,z)=>{ const F=frame(side,z), W=6, D=9, H=3.2, wall=[0.09,0.065,0.045], roof=[0.045,0.05,0.045];
+    const f=F(1.5,0.35,0); box(D,0.25,W,at(f.x,f.y,f.z),timber());
+    const back=F(-3,0.35+H/2,0); box(0.2,H,W,at(back.x,back.y,back.z),wall);
+    for(const w of [-W/2,W/2]){ const p=F(1.5,0.35+H/2,w); box(D,H,0.2,at(p.x,p.y,p.z),wall); }
+    for(const w of [-1,1]){ const p=F(1.5,0.35+H+0.85,w*W/4); box(D+0.8,0.12,W/2+0.6,at(p.x,p.y,p.z,0,0).multiply(new THREE.Matrix4().makeRotationX(w*0.52)),roof); }
+    for(let u=2;u<=6;u+=2) for(const w of [-W/2,W/2]){ const p=F(u,-1.2,w); cyl(0.13,3.0,at(p.x,p.y,p.z),[0.06,0.05,0.035]); }
+  };
+  [[1,-300,true],[-1,70,true],[1,320,false]].forEach(([side,z,b])=>jetty(side,spot(side,z),13+5*rnd(),b));
+  boathouse(-1,spot(-1,-150));
+  const one=mergeParts(parts), copies=[];
+  for(let m=-half;m<=half;m++) copies.push(one.clone().translate(0,0,m*LAND_P));
+  const built=new THREE.Mesh(concatGeos(copies),propMat); built.frustumCulled=false; group.add(built);
+  const jetties=3*SHORE_SPAN, houses=SHORE_SPAN;
+  // rocks along the rocky stretches, half in the water
+  const rockGeo=new THREE.IcosahedronGeometry(1,1); { const p=rockGeo.attributes.position;
+    for(let i=0;i<p.count;i++){ const x=p.getX(i), y=p.getY(i), z=p.getZ(i), r=1+0.22*Math.sin(3*x+1)*Math.sin(2.3*y+2)*Math.sin(3.7*z)+0.1*Math.sin(7*x+5*z); p.setXYZ(i,x*r,y*r*0.62,z*r); }
+    rockGeo.computeVertexNormals(); }
+  const rockList=[]; for(let i=0;i<4000 && rockList.length<90;i++){ const side=i%2?1:-1, z=-LAND_P/2+rnd()*LAND_P, st=shoreType(side,z); if(st.rock<0.5)continue;
+    const ax=waterlineX(side,z)+(rnd()-0.4)*6, s=0.5+Math.pow(rnd(),2)*2.2; rockList.push({x:side*ax,z,s,y:landH(side*ax,z)-0.35*s,ry:rnd()*6.3,t:0.75+0.5*rnd()}); }
+  const rocks=new THREE.InstancedMesh(rockGeo,new THREE.MeshStandardMaterial({color:new THREE.Color(0.075,0.07,0.062),roughness:1,flatShading:true,envMapIntensity:0.45}),rockList.length*SHORE_SPAN);
+  { const M=new THREE.Matrix4(), q=new THREE.Quaternion(), c=new THREE.Color(); let i=0;
+    for(let m=-half;m<=half;m++) for(const r of rockList){ M.compose(V3(r.x,r.y,r.z+m*LAND_P),q.setFromAxisAngle(UP,r.ry),V3(r.s,r.s,r.s)); rocks.setMatrixAt(i,M); rocks.setColorAt(i,c.setRGB(r.t,r.t*0.97,r.t*0.92)); i++; } }
+  rocks.frustumCulled=false; group.add(rocks);
+  // reed beds in the shallows along the reedy stretches, in the trees' material so they sway with them
+  const rb=treeBuilder({c:V3(0,0.5,0),r:1.1,y0:0,y1:1.9});
+  for(let i=0;i<3;i++){ const a=i*Math.PI/3; rb.card(V3(0,0.9,0),V3(Math.cos(a),0,Math.sin(a)),V3(0,1,0),2.2,1.8,ATLAS_CELL.reed); }
+  const reedList=[]; for(let i=0;i<8000 && reedList.length<260;i++){ const side=i%2?1:-1, z=-LAND_P/2+rnd()*LAND_P, st=shoreType(side,z); if(rnd()>st.reed)continue;
+    const ax=waterlineX(side,z)+(rnd()-0.7)*10; reedList.push({x:side*ax,z,y:Math.min(0,landH(side*ax,z))-0.15,s:0.8+0.6*rnd(),sy:0.8+0.3*rnd(),ry:rnd()*6.3,t:0.8+0.35*rnd()}); }
+  const reeds=new THREE.InstancedMesh(rb.geometry(),treeMat,reedList.length*SHORE_SPAN);
+  { const M=new THREE.Matrix4(), q=new THREE.Quaternion(), c=new THREE.Color(); let i=0;
+    for(let m=-half;m<=half;m++) for(const r of reedList){ M.compose(V3(r.x,r.y,r.z+m*LAND_P),q.setFromAxisAngle(UP,r.ry),V3(r.s,r.s*r.sy,r.s)); reeds.setMatrixAt(i,M); reeds.setColorAt(i,c.setRGB(r.t,r.t,r.t*0.95)); i++; } }
+  reeds.frustumCulled=false; group.add(reeds);
+  group.userData={jetties,boathouses:houses}; return group;
+}
+const props=buildProps(); shore.add(props);
+// Which version of each chunk to draw: the near trees where any of it is inside the hand-over band's far edge, the far
+// ones where any of it is beyond the near edge (both, while a chunk straddles the band; the shader dissolves each tree
+// from one to the other by its own distance). Past treeHide a chunk isn't drawn, nor the ground under it: on high
+// that's behind the nearer ridge (1.5 km); on the lower settings it's in the haze, where the bank's far end can show.
+const TREE_BAND=70;
+function updateTreeLod(){
+  const Q=QUALITY[quality], far=Q.treeFar, hide=Q.treeHide, cz=camera.position.z-shore.position.z;
+  treeUniforms.uLodFar.value=far; treeUniforms.uLodBand.value=TREE_BAND;
+  for(const m of trees){ const a=Math.abs(cz-m.userData.zmid), d=a-TREE_CHUNK/2; m.userData.d=d;
+    const on=d<hide && (Q.props || m.userData.kind!=='bush');   // the undergrowth goes with the props on low
+    m.visible=on && d<far+TREE_BAND/2; m.userData.far.visible=on && a+TREE_CHUNK/2>far-TREE_BAND/2; }
+  for(const g of landParts) g.visible=Math.abs(cz-g.userData.zmid)-LAND_P/2<hide;   // and the ground with them
+}
+// Far hills: three wooded ridges round the camera, each lying back up its slope so the sun shades it, with a tree-lined
+// crest and a speckle of forest on its face, fading into the haze the further off it is (and more at its foot, where the
+// air is thicker). They ride with the camera, so their texture is in their own coordinates.
+function makeRidge(radius,n,baseH,varH,haze,seed){
   const rnd=mulberry32(seed); const ph=[rnd()*6,rnd()*6,rnd()*6,rnd()*6]; const hs=[];
   for(let i=0;i<n;i++){const a=i/n*Math.PI*2; const big=0.5+0.5*Math.sin(a*3+ph[0])*Math.sin(a*5+ph[1]); const mid=0.5+0.5*Math.sin(a*11+ph[2])*Math.cos(a*17+ph[3]); hs.push(baseH+varH*(0.55*big+0.3*mid+0.15*rnd()));}
   let sm=hs; for(let k=0;k<2;k++){const src=sm; sm=src.map((h,i)=>(src[(i-1+n)%n]+2*h+src[(i+1)%n])/4);}
-  const pos=[],idx=[];
-  for(let i=0;i<n;i++){const a=i/n*Math.PI*2;const r=radius*(1+0.03*Math.sin(a*7+ph[0]));const x=Math.cos(a)*r,z=Math.sin(a)*r;pos.push(x,-40,z,x,sm[i],z);}
-  for(let i=0;i<n;i++){const j=(i+1)%n;const b=i*2,c=j*2;idx.push(b,c,b+1,c,c+1,b+1);}
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setIndex(idx); g.computeVertexNormals();
-  return new THREE.Mesh(g,new THREE.MeshStandardMaterial({color,flatShading:true,roughness:1,side:THREE.DoubleSide}));
+  const crest=sm.map((h,i)=>h+radius*0.0028*(0.5+0.5*Math.sin(i*1.9+ph[2])*Math.sin(i*0.77+ph[1]))*(0.6+0.8*rnd()));   // trees on the skyline
+  const ROWS=[0,0.12,0.3,0.55,0.8,1], pos=[], row=[], idx=[];
+  for(let i=0;i<n;i++){ const a=i/n*Math.PI*2, r0=radius*(1+0.03*Math.sin(a*7+ph[0]));
+    for(const f of ROWS){ const r=r0*(1+0.2*f), y=-6+(crest[i]+6)*Math.pow(f,0.8); pos.push(Math.cos(a)*r,y,Math.sin(a)*r); row.push(f); } }
+  const R=ROWS.length;
+  for(let i=0;i<n;i++){ const j=(i+1)%n; for(let k=0;k<R-1;k++){ const a=i*R+k, b=j*R+k; idx.push(a,b,a+1,b,b+1,a+1); } }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setAttribute('aRow',new THREE.Float32BufferAttribute(row,1)); g.setIndex(idx); g.computeVertexNormals();
+  const m=new THREE.MeshStandardMaterial({color:new THREE.Color(0.032,0.055,0.03),roughness:1,side:THREE.DoubleSide,fog:false});
+  m.onBeforeCompile=sh=>{
+    sh.uniforms.uHaze={value:FOG_COLOR}; sh.uniforms.uHazeK={value:haze};
+    sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute float aRow; varying float vRow; varying vec3 vLoc;')
+      .replace('#include <begin_vertex>','#include <begin_vertex>\nvRow=aRow; vLoc=position;');
+    sh.fragmentShader=sh.fragmentShader.replace('#include <common>',`#include <common>\nuniform vec3 uHaze; uniform float uHazeK; varying float vRow; varying vec3 vLoc;\n${NOISE_GLSL}`)
+      .replace('#include <color_fragment>',`#include <color_fragment>
+        { float a=atan(vLoc.z,vLoc.x)*${radius.toFixed(1)}; vec2 p=vec2(a,vLoc.y);
+          float t=vnoise(p*0.09)*0.6+vnoise(p*0.31)*0.4; diffuseColor.rgb*=0.55+0.8*t;
+          diffuseColor.rgb=mix(diffuseColor.rgb,vec3(0.06,0.065,0.035),smoothstep(0.62,0.8,vnoise(p*0.012))*0.6); }`)
+      .replace('#include <opaque_fragment>','outgoingLight=mix(outgoingLight,uHaze,clamp(uHazeK*(1.0+0.35*(1.0-vRow)),0.0,0.97));\n#include <opaque_fragment>');
+  };
+  return new THREE.Mesh(g,m);
 }
 const hills=new THREE.Group();
-hills.add(makeRidge(2100,260,60,240,new THREE.Color(0.09,0.15,0.11),7));
-hills.add(makeRidge(1500,220,30,120,new THREE.Color(0.08,0.14,0.09),3));
+hills.add(makeRidge(3000,420,140,300,0.8,11));
+hills.add(makeRidge(2100,560,60,240,0.48,7));
+hills.add(makeRidge(1500,720,30,120,0.24,3));
 scene.add(hills);
 
 // ---------- materials & primitives ----------
@@ -2137,40 +2507,136 @@ function ragToPose(){
 }
 
 // ---------- particles ----------
-function softTex(size,inner,outer){const c=document.createElement('canvas');c.width=c.height=size;const x=c.getContext('2d');const g=x.createRadialGradient(size/2,size/2,0,size/2,size/2,size/2);g.addColorStop(0,`rgba(255,255,255,${inner})`);g.addColorStop(0.5,`rgba(255,255,255,${inner*0.55})`);g.addColorStop(1,`rgba(255,255,255,${outer})`);x.fillStyle=g;x.fillRect(0,0,size,size);return new THREE.CanvasTexture(c);}
-const sprayTex=softTex(64,1,0);
+// Spray lives on the GPU. Each particle keeps only where, when and how fast it left the water; the vertex shader works
+// out where it is now (drag sideways, gravity down) and where the water is under it, so a drop that falls back in is
+// gone. Only the slots written since the last frame go up to the GPU. Three kinds: droplets, streaked along their
+// motion; sheets, the torn curtain off an edge; and mist, big, faint and slow, hanging behind the board and the boat.
+// Spray is lit from the sun and glows when the sun is behind it, in HDR so the brightest of it catches the bloom.
+const SPRAY_DROP=0, SPRAY_SHEET=1, SPRAY_MIST=2;
 class Spray{
   constructor(n){
-    this.n=n; this.pos=new Float32Array(n*3); this.vel=new Float32Array(n*3); this.life=new Float32Array(n); this.max=new Float32Array(n); this.size=new Float32Array(n); this.alpha=new Float32Array(n); this.i=0;
-    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(this.pos,3)); g.setAttribute('aSize',new THREE.BufferAttribute(this.size,1)); g.setAttribute('aAlpha',new THREE.BufferAttribute(this.alpha,1));
-    const m=new THREE.ShaderMaterial({transparent:true,depthWrite:false,uniforms:{uScale:{value:innerHeight*0.5},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR}},
-      vertexShader:`attribute float aSize; attribute float aAlpha; varying float vA; varying float vD; uniform float uScale; void main(){ vA=aAlpha; vec4 mv=modelViewMatrix*vec4(position,1.0); vD=-mv.z; gl_PointSize = aSize*uScale/max(1.0,-mv.z); gl_Position=projectionMatrix*mv; }`,
-      fragmentShader:`varying float vA; varying float vD; uniform vec3 uFog; uniform float uFogNear; uniform float uFogFar;
-        void main(){ vec2 pc=gl_PointCoord-0.5; float r=length(pc)*2.0; if(r>1.0)discard;
-          float a=(1.0-r*r)*(1.0-r*r)*vA;
-          float lit=0.5+0.5*clamp(0.6-pc.y*1.8-pc.x*0.7,0.0,1.0);
-          vec3 col=mix(vec3(0.55,0.64,0.74),vec3(1.0,1.0,1.0),lit);
-          col=mix(col,uFog,smoothstep(uFogNear,uFogFar,vD));
-          gl_FragColor=vec4(col,a); }`});
-    this.mesh=new THREE.Points(g,m); this.mesh.frustumCulled=false; scene.add(this.mesh); this.mat=m;
+    this.n=n; this.size=n; this.i=0; this.clock=0; this.rate=1; this.d0=0; this.dn=0;
+    const g=new THREE.InstancedBufferGeometry();
+    g.setAttribute('position',new THREE.Float32BufferAttribute([-1,-1,0, 1,-1,0, 1,1,0, -1,1,0],3)); g.setIndex([0,1,2,0,2,3]);
+    const attr=(name,size)=>{ const a=new THREE.InstancedBufferAttribute(new Float32Array(n*size),size); a.setUsage(THREE.DynamicDrawUsage); g.setAttribute(name,a); return a; };
+    this.aP0=attr('aP0',3); this.aV0=attr('aV0',3); this.aT=attr('aT',4); g.instanceCount=n; this.geo=g;
+    const m=new THREE.ShaderMaterial({transparent:true,depthWrite:false,
+      uniforms:{uClock:{value:0},uWaterT:{value:0},uBoat:{value:V3()},uSun:{value:SUN},uViewH:{value:innerHeight},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR}},
+      vertexShader:`attribute vec3 aP0; attribute vec3 aV0; attribute vec4 aT;
+        uniform float uClock; uniform float uWaterT; uniform vec3 uBoat; uniform vec3 uSun; uniform float uViewH; uniform float uFogNear; uniform float uFogFar;
+        varying vec2 vUv; varying float vA; varying float vKind; varying float vSeed; varying vec3 vLight; varying float vFog;
+        ${WAKE_GLSL}
+        void main(){
+          float tau=uClock-aT.x, life=aT.y, size=aT.z, kind=aT.w;
+          if(life<=0.0 || tau<0.0 || tau>life){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }
+          float k=kind<0.5?0.9:(kind<1.5?1.6:2.5), g=kind<0.5?9.81:6.0, e=exp(-k*tau), age=tau/life;
+          vec3 p=aP0+vec3(aV0.x,0.0,aV0.z)*(1.0-e)/k;
+          vec3 vel=vec3(aV0.x*e,aV0.y-g*tau,aV0.z*e);
+          if(kind<1.5) p.y=aP0.y+aV0.y*tau-0.5*g*tau*tau;
+          else { p.y=aP0.y+aV0.y*(1.0-e)/k+0.18*tau; vel.y=aV0.y*e+0.18; }
+          float h=wake(p.x-uBoat.x,uBoat.z-p.z).x+ambient(p.x,p.z,uWaterT);
+          if(kind<1.5 && tau>0.05 && p.y<h-0.02){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }   // back in the lake
+          float grow=kind<0.5?1.0:(kind<1.5?1.0+0.8*age:1.0+1.5*age);
+          float w=0.5*size*grow;
+          if(kind>1.5) p.y=max(p.y,h+0.45*w);   // mist sits on the water, not through it
+          vec4 mv=viewMatrix*vec4(p,1.0);
+          float pxPerM=projectionMatrix[1][1]*0.5*uViewH/max(0.1,-mv.z);
+          float len=w, alpha=kind<0.5?0.85:(kind<1.5?0.42:0.085);
+          vec2 dir=vec2(0.0,1.0);
+          if(kind<0.5){ vec2 vv=(viewMatrix*vec4(vel,0.0)).xy; float sv=length(vv); if(sv>1e-3)dir=vv/sv; len=w+0.5*0.035*length(vel); }
+          else { float a=fract(aP0.x*3.17+aP0.z*1.31)*6.2832; dir=vec2(cos(a),sin(a)); }   // no sin() of a world position: it goes NaN far down the course
+          float px=w*pxPerM;
+          if(px<0.75){ float s=0.75/max(px,1e-4); w*=s; len*=s; alpha/=s*s; }             // never thinner than 1.5 px; fainter instead
+          if(kind>1.5){ float cap=0.09*uViewH/max(px,1e-4); if(cap<1.0){ w*=cap; len*=cap; } } // mist never fills the screen
+          vec2 perp=vec2(dir.y,-dir.x);   // (perp, dir) right-handed, so the quad faces the camera
+          mv.xy+=dir*position.y*len+perp*position.x*w;
+          gl_Position=projectionMatrix*mv;
+          float fade=kind<0.5?min(1.0,(life-tau)*4.0):(kind<1.5?smoothstep(0.0,0.06,tau)*pow(1.0-age,1.2):smoothstep(0.0,0.25,age)*pow(1.0-age,1.5));
+          vA=alpha*fade; vUv=position.xy; vKind=kind; vSeed=fract(aP0.x*3.17+aP0.z*1.31);
+          vec3 V=normalize(cameraPosition-p);
+          float back=pow(max(dot(-V,uSun),0.0),6.0);
+          vLight=vec3(0.55,0.63,0.72)+vec3(1.0,0.94,0.84)*(0.45+2.0*back);
+          if(kind>1.5) vLight*=0.9;
+          vFog=smoothstep(uFogNear,uFogFar,-mv.z);
+        }`,
+      fragmentShader:`uniform vec3 uFog; varying vec2 vUv; varying float vA; varying float vKind; varying float vSeed; varying vec3 vLight; varying float vFog;
+        ${NOISE_GLSL}
+        void main(){
+          float r=length(vUv); if(r>1.0)discard;
+          float a;
+          if(vKind<0.5){ float q=1.0-r*r; a=q*q; }
+          else if(vKind<1.5){ float n=vnoise(vUv*2.6+vSeed*37.0)+0.5*vnoise(vUv*6.1-vSeed*11.0); a=smoothstep(1.0,0.25,r)*smoothstep(0.55,1.05,n+0.45*(1.0-r)); }
+          else { a=pow(smoothstep(1.0,0.0,r),1.5)*(0.55+0.45*vnoise(vUv*1.7+vSeed*23.0)); }
+          a*=vA; if(a<0.003)discard;
+          gl_FragColor=vec4(mix(vLight,uFog,vFog),a);
+        }`});
+    this.mesh=new THREE.Mesh(g,m); this.mesh.frustumCulled=false; scene.add(this.mesh); this.mat=m;
   }
-  emit(x,y,z,vx,vy,vz,life,size){const i=this.i;this.i=(i+1)%this.n;this.pos[i*3]=x;this.pos[i*3+1]=y;this.pos[i*3+2]=z;this.vel[i*3]=vx;this.vel[i*3+1]=vy;this.vel[i*3+2]=vz;this.life[i]=life;this.max[i]=life;this.size[i]=size;}
-  update(dt){const p=this.pos,v=this.vel;for(let i=0;i<this.n;i++){if(this.life[i]<=0){this.alpha[i]=0;continue;}this.life[i]-=dt;v[i*3+1]-=G*dt;v[i*3]*=0.985;v[i*3+2]*=0.985;p[i*3]+=v[i*3]*dt;p[i*3+1]+=v[i*3+1]*dt;p[i*3+2]+=v[i*3+2]*dt;const t=this.life[i]/this.max[i];this.alpha[i]=Math.min(1,t*2.5)*clamp(0.16/this.size[i],0.25,0.9);}
-    this.mesh.geometry.attributes.position.needsUpdate=true;this.mesh.geometry.attributes.aAlpha.needsUpdate=true;this.mesh.geometry.attributes.aSize.needsUpdate=true;}
+  // kind defaults to a droplet, except that the big lumps the old callers throw (a ragdoll slapping down) read as sheets
+  emit(x,y,z,vx,vy,vz,life,size,kind){
+    if(kind===undefined)kind=size>0.09?SPRAY_SHEET:SPRAY_DROP;
+    const i=this.i; this.i=(i+1)%this.size; if(this.dn===0)this.d0=i; this.dn=Math.min(this.size,this.dn+1);
+    const P=this.aP0.array, Vv=this.aV0.array, T=this.aT.array;
+    P[i*3]=x; P[i*3+1]=y; P[i*3+2]=z; Vv[i*3]=vx; Vv[i*3+1]=vy; Vv[i*3+2]=vz;
+    T[i*4]=this.clock; T[i*4+1]=life; T[i*4+2]=size; T[i*4+3]=kind;
+  }
+  // emit about rate*dt particles (times the quality setting), carrying the fraction over in acc[key]
+  // how much of the buffer to use (and draw): smaller on the lower settings
+  setSize(k){ this.size=Math.min(this.n,k); this.geo.instanceCount=this.size; if(this.i>=this.size)this.i=0; this.dn=0; }
+  emitRate(acc,key,rate,dt,fn){ acc[key]=(acc[key]||0)+rate*dt*this.rate; while(acc[key]>=1){ acc[key]-=1; fn(); } }
+  update(dt){
+    this.clock+=dt;
+    const u=this.mat.uniforms; u.uClock.value=this.clock; u.uWaterT.value=simTime; u.uBoat.value.set(0,0,boatZ-STERN_OFF);
+    if(this.dn>0){
+      for(const a of [this.aP0,this.aV0,this.aT]){
+        const s=a.itemSize; a.clearUpdateRanges();
+        const N=this.size;
+        if(this.dn>=N) a.addUpdateRange(0,N*s);
+        else if(this.d0+this.dn<=N) a.addUpdateRange(this.d0*s,this.dn*s);
+        else { a.addUpdateRange(this.d0*s,(N-this.d0)*s); a.addUpdateRange(0,(this.d0+this.dn-N)*s); }
+        a.needsUpdate=true;
+      }
+      this.dn=0;
+    }
+  }
 }
-const spray=new Spray(3000);
-// foam decals left by the board: speckled, normal-blended, stretched along the direction of travel
-function foamTex(){const c=document.createElement('canvas');c.width=c.height=128;const x=c.getContext('2d');const rnd=mulberry32(77);const g=x.createRadialGradient(64,64,0,64,64,64);g.addColorStop(0,'rgba(255,255,255,0.55)');g.addColorStop(0.6,'rgba(255,255,255,0.3)');g.addColorStop(1,'rgba(255,255,255,0)');x.fillStyle=g;x.fillRect(0,0,128,128);x.globalCompositeOperation='destination-out';for(let i=0;i<140;i++){const r=2+rnd()*7;x.fillStyle=`rgba(0,0,0,${0.3+rnd()*0.7})`;x.beginPath();x.arc(rnd()*128,rnd()*128,r,0,Math.PI*2);x.fill();}x.globalCompositeOperation='source-over';for(let i=0;i<60;i++){const r=1+rnd()*3;x.fillStyle=`rgba(255,255,255,${0.4+rnd()*0.6})`;x.beginPath();x.arc(rnd()*128,rnd()*128,r,0,Math.PI*2);x.fill();}const t=new THREE.CanvasTexture(c);return t;}
-const FOAM_N=420;
+const spray=new Spray(16384);
+// Foam the board leaves on the water: lacy streaks stretched along its line, lingering about ten seconds
+function foamTex(){
+  // a white sheet with holes punched through it: what's left between the holes is the lace. The holes are squashed
+  // along the line, since the decal is stretched three times along it
+  const S=256, c=document.createElement('canvas'); c.width=c.height=S; const x=c.getContext('2d'); const rnd=mulberry32(77);
+  x.fillStyle='rgba(255,255,255,0.62)'; x.fillRect(0,0,S,S);
+  x.globalCompositeOperation='destination-out';
+  for(let i=0;i<340;i++){ const r=2.5+Math.pow(rnd(),1.6)*15; x.fillStyle=`rgba(0,0,0,${0.55+0.45*rnd()})`; x.beginPath(); x.ellipse(rnd()*S,rnd()*S,r,r*(0.35+0.25*rnd()),(rnd()-0.5)*0.6,0,7); x.fill(); }
+  x.globalCompositeOperation='source-over';
+  for(let i=0;i<160;i++){ x.fillStyle=`rgba(255,255,255,${0.35+0.5*rnd()})`; x.beginPath(); x.arc(rnd()*S,rnd()*S,0.6+rnd()*1.8,0,7); x.fill(); }
+  x.globalCompositeOperation='destination-in';
+  const g=x.createRadialGradient(S/2,S/2,S*0.12,S/2,S/2,S*0.5); g.addColorStop(0,'rgba(0,0,0,1)'); g.addColorStop(0.55,'rgba(0,0,0,0.7)'); g.addColorStop(1,'rgba(0,0,0,0)');
+  x.fillStyle=g; x.fillRect(0,0,S,S);
+  return new THREE.CanvasTexture(c);
+}
+const FOAM_N=1200, FOAM_LIFE=10;
 const foam=new THREE.InstancedMesh(new THREE.PlaneGeometry(1,1),new THREE.ShaderMaterial({transparent:true,depthWrite:false,uniforms:{uMap:{value:foamTex()}},
   vertexShader:`varying vec2 vUv; varying float vA; void main(){ vUv=uv; vA=instanceColor.r; gl_Position=projectionMatrix*modelViewMatrix*instanceMatrix*vec4(position,1.0); }`,
   fragmentShader:`uniform sampler2D uMap; varying vec2 vUv; varying float vA; void main(){ float a=texture2D(uMap,vUv).a*vA; if(a<0.004)discard; gl_FragColor=vec4(vec3(0.86,0.91,0.95),a); }`}),FOAM_N);
 foam.frustumCulled=false; scene.add(foam);
 const foamData=[]; for(let i=0;i<FOAM_N;i++){foamData.push({x:0,z:0,t:-1,s:1,yaw:0});}
 const _m4=new THREE.Matrix4(),_qFlat=new THREE.Quaternion().setFromAxisAngle(V3(1,0,0),-Math.PI/2),_qYaw=new THREE.Quaternion(),_qD=new THREE.Quaternion(),_col=new THREE.Color(),_sc=V3(),_pp=V3();
-let foamI=0; function dropFoam(x,z,s,yaw){const f=foamData[foamI];foamI=(foamI+1)%FOAM_N;f.x=x;f.z=z;f.t=0;f.s=s;f.yaw=yaw;}
-{ const c=new THREE.Color(0,0,0); for(let i=0;i<FOAM_N;i++)foam.setColorAt(i,c); }
-function updateFoam(dt,t){for(let i=0;i<FOAM_N;i++){const f=foamData[i];if(f.t<0){_m4.makeScale(0,0,0);foam.setMatrixAt(i,_m4);continue;}f.t+=dt;const life=3.2;if(f.t>life){f.t=-1;_m4.makeScale(0,0,0);foam.setMatrixAt(i,_m4);continue;}const k=f.t/life;const sc=f.s*(0.6+1.6*k);const y=waterAt(f.x,f.z,boatZ,t)+0.03;_qYaw.setFromAxisAngle(UP,f.yaw);_qD.copy(_qYaw).multiply(_qFlat);_m4.compose(_pp.set(f.x,y,f.z),_qD,_sc.set(sc*0.7,sc*1.5,1));foam.setMatrixAt(i,_m4);const a=Math.pow(1-k,1.8)*0.42;_col.setRGB(a,a,a);foam.setColorAt(i,_col);}foam.instanceMatrix.needsUpdate=true;if(foam.instanceColor)foam.instanceColor.needsUpdate=true;}
+const _m0=new THREE.Matrix4().makeScale(0,0,0);
+let foamI=0; function dropFoam(x,z,s,yaw){const f=foamData[foamI];foamI=(foamI+1)%FOAM_N;f.x=x;f.z=z;f.t=0;f.s=s*(0.85+0.3*Math.random());f.yaw=yaw+(Math.random()-0.5)*0.3;}
+{ const c=new THREE.Color(0,0,0); for(let i=0;i<FOAM_N;i++){ foam.setColorAt(i,c); foam.setMatrixAt(i,_m0); } }
+function updateFoam(dt,t){
+  for(let i=0;i<FOAM_N;i++){
+    const f=foamData[i]; if(f.t<0)continue;
+    f.t+=dt; if(f.t>FOAM_LIFE){ f.t=-1; foam.setMatrixAt(i,_m0); continue; }
+    const k=f.t/FOAM_LIFE, sc=f.s*(0.7+1.3*Math.sqrt(k)), y=waterAt(f.x,f.z,boatZ,t)+0.03;
+    _qYaw.setFromAxisAngle(UP,f.yaw); _qD.copy(_qYaw).multiply(_qFlat);
+    _m4.compose(_pp.set(f.x,y,f.z),_qD,_sc.set(sc*0.7,sc*2.1,1)); foam.setMatrixAt(i,_m4);
+    const a=Math.pow(1-k,1.3)*0.38; _col.setRGB(a,a,a); foam.setColorAt(i,_col);
+  }
+  foam.instanceMatrix.needsUpdate=true; if(foam.instanceColor)foam.instanceColor.needsUpdate=true;
+}
 
 // ---------- game state ----------
 let boatZ=0, simTime=0, started=false, booted=false, muted=false; // booted: the loading screen has finished
@@ -2408,7 +2874,13 @@ function bail(reason,fall,vel){
   showTrick(reason,'','No Risk, No Story. The boat\'s coming round.',true);
   updateSessionHUD();
 }
-function sprayBurst(p,n,power){n=Math.round(n*2.2);for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,r=Math.random();spray.emit(p.x+Math.cos(a)*r*0.7,p.y+0.05,p.z+Math.sin(a)*r*0.7,Math.cos(a)*r*4.5*power,(1.5+Math.random()*4.5)*power,BOAT_SPEED*0.6+Math.sin(a)*r*4.5*power,0.45+Math.random()*0.6,0.07+Math.random()*0.26);}}
+// a landing or a slam: droplets, a crown of torn sheets thrown out and up, and a puff of mist
+function sprayBurst(p,n,power){
+  const k=spray.rate;
+  for(let i=0,m=Math.round(n*2.2*k);i<m;i++){const a=Math.random()*Math.PI*2,r=Math.random();spray.emit(p.x+Math.cos(a)*r*0.7,p.y+0.05,p.z+Math.sin(a)*r*0.7,Math.cos(a)*r*4.5*power,(1.5+Math.random()*4.5)*power,BOAT_SPEED*0.6+Math.sin(a)*r*4.5*power,0.45+Math.random()*0.6,0.015+Math.random()*0.03,SPRAY_DROP);}
+  for(let i=0,m=Math.round(n*0.5*k);i<m;i++){const a=Math.random()*Math.PI*2,o=(2.5+Math.random()*2)*power;spray.emit(p.x+Math.cos(a)*0.5,p.y+0.05,p.z+Math.sin(a)*0.5,Math.cos(a)*o,(2.5+Math.random()*3)*power,BOAT_SPEED*0.6+Math.sin(a)*o,0.5+Math.random()*0.4,0.2+Math.random()*0.3,SPRAY_SHEET);}
+  for(let i=0,m=Math.round(n*0.15*k);i<m;i++){const a=Math.random()*Math.PI*2;spray.emit(p.x+Math.cos(a)*0.6,p.y+0.3,p.z+Math.sin(a)*0.6,Math.cos(a)*1.2*power,0.6+Math.random()*0.8,BOAT_SPEED*0.5,1.5+Math.random()*1.0,0.8+Math.random()*1.0,SPRAY_MIST);}
+}
 
 // ---------- visuals per frame ----------
 const _tiltQ=new THREE.Quaternion(),_yawQ=new THREE.Quaternion(),_tmpQ=new THREE.Quaternion(),_e=new THREE.Euler();
@@ -2499,21 +2971,23 @@ function updateRiderVisual(dt){
   _v.set(R.pos.x*0.5,0,(R.pos.z+boatZ)*0.5);
   sun.position.copy(_v).addScaledVector(SUN,80); sun.target.position.copy(_v);
 }
-let foamClock=0, sprayClock=0;
+let foamClock=0; const sprayAcc={};
 function updateEffects(dt){
-  // board wash + spray while riding
+  // the board while riding: foam on the water, and spray off the edge that's biting, thrown out of the turn
   if(R.state==='riding'){
-    foamClock+=dt; if(foamClock>0.11){foamClock=0;dropFoam(R.pos.x,R.pos.z,0.7+Math.abs(R.steer)*0.8,R.travelYaw);}
-    const sp=Math.hypot(R.vel.x,R.vel.z); const edge=Math.abs(R.steer);
-    sprayClock+=dt*(40+edge*420)*(sp/BOAT_SPEED);
-    while(sprayClock>1){sprayClock-=1;
-      const yaw=R.boardYaw; const nx=Math.cos(yaw),nz=-Math.sin(yaw); const side=-Math.sign(R.steer||(Math.random()-0.5));
-      const ox=nx*side*0.25,oz=nz*side*0.25;
-      spray.emit(R.pos.x+ox+(Math.random()-0.5)*0.3,R.pos.y+0.05,R.pos.z+oz+(Math.random()-0.5)*0.7, nx*side*(1.5+edge*6)*(0.5+Math.random())+R.vel.x*0.15, 0.5+Math.random()*(1.2+edge*4.2), R.vel.z*0.35+Math.random()*1.5, 0.3+Math.random()*0.5, 0.05+Math.random()*(0.12+edge*0.16));
-    }
+    const sp=Math.hypot(R.vel.x,R.vel.z), edge=Math.abs(R.steer), spd=sp/BOAT_SPEED;
+    foamClock+=dt; if(foamClock>0.06){foamClock=0;dropFoam(R.pos.x,R.pos.z,0.7+edge*0.8,R.travelYaw);}
+    const yaw=R.boardYaw, nx=Math.cos(yaw), nz=-Math.sin(yaw), side=-Math.sign(R.steer||(Math.random()-0.5));
+    const ox=R.pos.x+nx*side*0.25, oz=R.pos.z+nz*side*0.25, y0=R.pos.y+0.05, out=()=>(1.5+edge*6)*(0.5+Math.random());
+    spray.emitRate(sprayAcc,'drop',(120+900*edge)*spd,dt,()=>{ const o=out(); spray.emit(ox+(Math.random()-0.5)*0.3,y0,oz+(Math.random()-0.5)*0.7, nx*side*o+R.vel.x*0.15, 0.5+Math.random()*(1.2+edge*4.2), R.vel.z*0.35+Math.random()*1.5, 0.3+Math.random()*0.5, 0.012+Math.random()*0.02, SPRAY_DROP); });
+    spray.emitRate(sprayAcc,'sheet',(20+160*edge)*spd,dt,()=>{ const o=out()*0.8; spray.emit(ox+(Math.random()-0.5)*0.2,y0,oz+(Math.random()-0.5)*0.5, nx*side*o+R.vel.x*0.15, 0.4+Math.random()*(0.8+edge*3.4), R.vel.z*0.4+Math.random()*1.2, 0.35+Math.random()*0.5, 0.15+Math.random()*0.3*(0.4+edge), SPRAY_SHEET); });
+    spray.emitRate(sprayAcc,'mist',(6+30*edge)*spd,dt,()=>{ spray.emit(ox+(Math.random()-0.5)*0.6,y0+0.2,oz-0.4-Math.random()*0.6, nx*side*(0.4+edge*1.6)*Math.random()+R.vel.x*0.2, 0.3+Math.random()*0.5, R.vel.z*0.55, 1.4+Math.random()*1.2, 0.6+Math.random()*0.8, SPRAY_MIST); });
   }
-  // boat prop wash
-  for(let i=0;i<8;i++)spray.emit((Math.random()-0.5)*1.3,0.0,boatZ-STERN_OFF-0.3-Math.random()*0.8,(Math.random()-0.5)*2.4,1.2+Math.random()*3.4,BOAT_SPEED*0.3+Math.random()*2,0.45+Math.random()*0.5,0.08+Math.random()*0.28);
+  // the boat's prop wash: churn, torn sheets and a mist that hangs over the track
+  const sz=boatZ-STERN_OFF;
+  spray.emitRate(sprayAcc,'washDrop',300,dt,()=>spray.emit((Math.random()-0.5)*1.3,0.0,sz-0.3-Math.random()*0.8,(Math.random()-0.5)*2.4,1.2+Math.random()*3.4,BOAT_SPEED*0.3+Math.random()*2,0.45+Math.random()*0.5,0.015+Math.random()*0.025,SPRAY_DROP));
+  spray.emitRate(sprayAcc,'washSheet',40,dt,()=>spray.emit((Math.random()-0.5)*1.4,0.05,sz-0.4-Math.random()*1.0,(Math.random()-0.5)*2.0,0.8+Math.random()*2.2,BOAT_SPEED*0.35+Math.random()*1.5,0.5+Math.random()*0.5,0.3+Math.random()*0.4,SPRAY_SHEET));
+  spray.emitRate(sprayAcc,'washMist',18,dt,()=>spray.emit((Math.random()-0.5)*1.8,0.3,sz-0.8-Math.random()*1.5,(Math.random()-0.5)*1.0,0.3+Math.random()*0.6,BOAT_SPEED*0.45,2.0+Math.random()*1.5,1.0+Math.random()*1.2,SPRAY_MIST));
   spray.update(dt); updateFoam(dt,simTime);
 }
 function updateBoatVisual(dt){
@@ -2873,10 +3347,11 @@ function updateHUD(dt){
 
 // ---------- main loop ----------
 const _dbs=new THREE.Vector2();
-function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); spray.mat.uniforms.uScale.value=h*0.5;
+function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix();
   renderer.getDrawingBufferSize(_dbs); const bw=Math.max(2,Math.floor(_dbs.x)),bh=Math.max(2,Math.floor(_dbs.y));
   post.sceneRT.setSize(bw,bh); post.bright.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurA.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurB.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2));
-  post.finalMat.uniforms.uRes.value.set(bw,bh); reflRT.setSize(Math.max(2,Math.floor(bw*reflScale)),Math.max(2,Math.floor(bh*reflScale))); }
+  post.finalMat.uniforms.uRes.value.set(bw,bh); spray.mat.uniforms.uViewH.value=bh; reflRT.setSize(Math.max(2,Math.floor(bw*reflScale)),Math.max(2,Math.floor(bh*reflScale))); }
+performance.mark('tyc:built');
 addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2);
 // The loading screen holds the card back until the rider and the crew are in and a few frames have drawn them, so their
 // shaders have compiled before anyone takes the handle. If a model never reports back, it lets go after 15 s anyway.
@@ -2895,6 +3370,10 @@ function frame(now){
   requestAnimationFrame(frame);
   const raw=(now-last)/1000; let dt=Math.min(0.05,raw); last=now; if(dt<=0)dt=0.0001;
   if(document.visibilityState==='visible' && raw<0.5)autoQuality(raw);
+  tick(dt);
+}
+// one frame of the game: also called by tools/probe.js to step it by hand when the page isn't animating
+function tick(dt){
   if(!paused){ gatherInput(); physics(dt); }   // Settings pauses the ride: the world holds still, sound and music play on
   updateBoatVisual(dt); updateRiderVisual(paused?0.0001:dt); if(!paused)updateEffects(dt); updateCamera(dt,false); updateAudio(dt); djUpdate(dt); updateHUD(dt); updateFade(dt);
   // scrolling world
@@ -2904,6 +3383,7 @@ function frame(now){
   sky.position.copy(camera.position); hills.position.set(camera.position.x,0,camera.position.z);
   shore.position.z=Math.round(camera.position.z/LAND_P)*LAND_P;
   skyUniforms.uTime.value=simTime;
+  treeUniforms.uTime.value=simTime; updateTreeLod();
   for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uTime.value=simTime; m.uniforms.uBoat.value.set(0,0,boatZ-STERN_OFF); }
   renderer.shadowMap.needsUpdate=true;
   renderReflection();
