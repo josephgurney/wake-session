@@ -210,26 +210,30 @@ export async function bench() {
     landed: r.landed == null ? null : +r.landed.toFixed(2), farCrest: +r.farCrest.toFixed(2), speedRatio: +r.speedRatio.toFixed(3), maxT: +r.maxT.toFixed(3) }));
   return { runs, misses };
 }
-// Riding across the trough with Space held (the line loaded), from the middle toward the far wake, at rest and at 7 m/s
-// sideways (as after a short landing): the ripples and the prop-wash boil mustn't launch the rider anywhere in the
-// trough, before the foot of the far wake's back face (going out over the far wake loaded is a jump: that's fine).
+// Riding across the trough with Space held (the line loaded), from the foot of the near wake's back face to the far
+// wake, at 4-8 m/s sideways (8 is a hard cut or a short landing), over a spread of boil phases (the stern's place on the
+// lake) and chop times: the ripples, the boil and the chop together mustn't launch the rider anywhere short of the far
+// crest's last metre (going out over the far wake loaded is a jump: that's fine, and it's where nearCrest counts it).
 // Freezes the game like bench(), so run it last.
 /* global stepRider, resetRider, BOAT_SPEED, simTime */
 export function checkTrough() {
   physics = function () {}; gatherInput = function () {};
   const bad = [], dt = 1 / 120;
-  for (const v0 of [0, 4, 7]) for (const side of [1, -1]) {
-    boatZ = 0; simTime = 0; resetRider(); for (let t = 0; t < 0.5; t += dt) { boatZ += BOAT_SPEED * dt; simTime += dt; stepRider(dt); }
-    R.vel.x = side * v0; R.steerIn = side; R.loading = true;
-    for (let t = 0; t < 4; t += dt) {
+  let runs = 0;
+  for (let ph = 0; ph < 12; ph += 1.5) for (const t0 of [0, 1.7, 3.1]) for (const v0 of [4, 6, 7, 8]) for (const side of [1, -1]) {
+    boatZ = ph; simTime = t0; resetRider(); runs++;
+    for (let t = 0; t < 0.3; t += dt) { boatZ += BOAT_SPEED * dt; simTime += dt; stepRider(dt); }
+    const d0 = boatZ - STERN_OFF - R.pos.z;
+    R.pos.x = -side * (crestX(d0) - (1.3 + 0.04 * d0)); R.vel.x = side * v0; R.vySurf = 0; R.steerIn = side; R.loading = true;
+    for (let t = 0; t < 3; t += dt) {
       boatZ += BOAT_SPEED * dt; simTime += dt; stepRider(dt);
-      const d = boatZ - STERN_OFF - R.pos.z, xc = crestX(d), foot = xc - (1.3 + 0.04 * d);   // the back face's foot, as in wakeH
-      if (R.state === 'air') { if (Math.abs(R.pos.x) < foot) bad.push(`launched at x=${fmt(R.pos.x)} (back face from ${fmt(foot)}) crossing at ${v0} m/s to ${side > 0 ? 'port' : 'starboard'}`); break; }
-      if (Math.abs(R.pos.x) > xc) break;
+      const xc = crestX(boatZ - STERN_OFF - R.pos.z), far = side * R.pos.x > xc - 1;
+      if (R.state === 'air') { if (!far) bad.push(`launched at x=${fmt(R.pos.x)} (far crest ${fmt(side * xc)}) at ${v0} m/s, phase ${ph}, chop ${t0}`); break; }
+      if (side * R.pos.x > xc) break;
     }
     R.loading = false; R.steerIn = 0;
   }
-  return bad;
+  return bad.length > 10 ? [`${bad.length} of ${runs} crossings launched early`, ...bad.slice(0, 10)] : bad;
 }
 
 // Look from anywhere: hold the camera at pos looking at target (the game's camera code is swapped out, since any frame
@@ -377,10 +381,15 @@ export async function checkWater(baseMs = 8.98) {
   return bad;
 }
 // What counts as a wake jump: taking off within a metre of a crest, not from the dip outside it or the trough inside.
-/* global nearCrest */
+/* global nearCrest, wakeToWake */
 export function checkScoring() {
   if (typeof nearCrest !== 'function') return ['nearCrest(u, d) missing'];
+  if (typeof wakeToWake !== 'function') return ['wakeToWake(takeoffU, x, d) missing'];
   const d = 16.5, xc = crestX(d), bad = [];
+  // wake to wake: down on the other side, past the far crest (not on its upslope short of it)
+  for (const [u0, x, want, what] of [[-xc, xc + 0.3, true, 'just past the far crest'], [-xc, xc - 0.3, false, 'on the far upslope, 0.3 m short'],
+    [xc, -(xc + 1), true, 'past the far crest, other way'], [-xc, -(xc + 1), false, 'back on the same side'], [-xc, 0.5, false, 'in the trough']])
+    if (wakeToWake(u0, x, d) !== want) bad.push(`wake to wake, ${what}: ${want ? "doesn't count" : 'counts'}`);
   for (const [u, want, what] of [[xc - 0.3, true, 'the lip, just inside'], [-(xc + 0.4), true, 'the ramp below the lip'], [xc + 2.1, false, 'the dip outside'],
     [0, false, 'the middle of the trough'], [-(xc - 1.6), false, 'the foot of the back face'], [xc + 6, false, 'the flats']])
     if (nearCrest(u, d) !== want) bad.push(`${what} (u=${fmt(u)}): ${!want ? 'counts' : "doesn't count"} as a wake takeoff`);
