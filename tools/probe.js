@@ -70,6 +70,8 @@ export async function checkSpray() {
   if (typeof spray.clock !== 'number') bad.push('spray.clock');
   if (typeof spray.rate !== 'number') bad.push('spray.rate');
   if (FOAM_N !== 1200) bad.push(`FOAM_N is ${FOAM_N}, want 1200`);
+  // world coordinates run into the hundreds of thousands; GPU fast-math sin() of them returns NaN (see the README's trap)
+  if (/sin\s*\(\s*dot\s*\(\s*aP0/.test(spray.mat.vertexShader)) bad.push('spray vertex shader takes sin() of a world position');
   if (!bad.length) {
     const i = spray.i; spray.emit(1, 2, 3, 4, 5, 6, 0.7, 0.3, SPRAY_MIST);
     const a = spray.geo.attributes, T = a.aT.array;
@@ -133,6 +135,9 @@ export function checkScenery() {
   if (props.userData.jetties !== 3 * SHORE_SPAN || props.userData.boathouses !== SHORE_SPAN) bad.push(`props: ${props.userData.jetties} jetties, ${props.userData.boathouses} boathouses`);
   if (!landMat.onBeforeCompile || landMat.onBeforeCompile.toString().length < 50) bad.push('landMat has no ground shader');
   if (hills.children.length !== 3) bad.push(`${hills.children.length} ridges, want 3`);
+  // each period of ground is exactly one period long, so neighbours meet edge to edge instead of overlapping (z-fighting)
+  /* global landParts */
+  for (const g of landParts) { g.geometry.computeBoundingBox(); const b = g.geometry.boundingBox; if (Math.abs(b.max.z - b.min.z - LAND_P) > 1e-3) { bad.push(`ground period spans ${(b.max.z - b.min.z).toFixed(1)} m, want ${LAND_P}`); break; } }
   if (!('props' in QUALITY[0])) bad.push('QUALITY has no props field');
   else { const q = quality; setQuality(0); const lo = props.visible; setQuality(2); const hi = props.visible; setQuality(q); if (lo || !hi) bad.push(`props visible low ${lo}, high ${hi}`); }
   return bad;
@@ -142,7 +147,8 @@ export function checkScenery() {
 /* global onDown, TREE_GEO */
 export function checkQuality() {
   const bad = [], seen = [];
-  (0, eval)('qualityAuto=true'); setQuality(2);
+  (0, eval)('qualityAuto=true'); setQuality(2); step(0.1);
+  const progs0 = renderer.info.programs.length;   // a setting change mustn't compile a shader mid-ride (auto drops to low when frames are already slow)
   for (let i = 0; i < 4; i++) {
     onDown('KeyP'); step(0.3);
     const Q = QUALITY[quality], label = document.getElementById('quality').textContent; seen.push(label);
@@ -154,6 +160,7 @@ export function checkQuality() {
     if (trees.some(m => (Math.abs(cz - m.userData.zmid) - 225 > far ? 1 : 0) !== m.userData.lod)) bad.push(`tree detail off on ${Q.name}`);
   }
   if (!seen[3].includes('auto')) bad.push(`fourth press should return to auto, got "${seen[3]}"`);
+  if (renderer.info.programs.length !== progs0) bad.push(`changing setting compiled ${renderer.info.programs.length - progs0} new shader(s)`);
   return { bad, seen };
 }
 
