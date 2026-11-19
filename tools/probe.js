@@ -193,15 +193,43 @@ export function lodPop() {
 }
 
 const RUNS = [{ cut: 3, mode: 'relaxed' }, { cut: 3, mode: 'hold' }, { cut: 3, mode: 'pop' }, { cut: 6, mode: 'hold' }, { cut: 6, mode: 'pop' }];
+// misses: every target in jump_bench.py's TARGETS table the runs miss, and popped 6 m jumps that don't clear the far crest
 export async function bench() {
   const src = await (await fetch('/tools/jump_bench.py?' + Date.now())).text();
   const js = src.split('RUN_JS = """')[1].split('"""')[0];
   const run = (0, eval)('(' + js + ')');
-  return RUNS.map(cfg => {
-    const r = run(cfg);
-    return { run: `${cfg.cut} m ${cfg.mode}`, result: r.result, airT: +r.airT.toFixed(3), aboveLip: +r.aboveLip.toFixed(3),
-             speedRatio: +r.speedRatio.toFixed(3), maxT: +r.maxT.toFixed(3) };
-  });
+  const targets = [...src.split('\nTARGETS = [')[1].split(']\n')[0].matchAll(/\("([^"]+)", "(\w+)", ([\d.]+), ([\d.]+), "(\w+)"\)/g)]
+    .map(m => ({ label: m[1], key: m[2], lo: +m[3], hi: +m[4], which: m[5] }));
+  if (targets.length !== 5) throw new Error(`read ${targets.length} jump targets from jump_bench.py, want 5`);
+  const raw = RUNS.map(cfg => run(cfg)), misses = [];
+  for (const t of targets) for (const r of raw) if ((t.which === 'all' || r.cfg.mode === t.which) && !(r[t.key] >= t.lo && r[t.key] <= t.hi))
+    misses.push(`${r.cfg.cut} m ${r.cfg.mode}: ${t.label} ${fmt(r[t.key])} (want ${t.lo}-${t.hi})`);
+  for (const r of raw) if (r.cfg.mode === 'pop' && r.cfg.cut === 6 && !(r.landed != null && r.landed > r.farCrest))
+    misses.push(`6 m pop: landed at ${r.landed == null ? '-' : fmt(r.landed)}, short of the far crest ${fmt(r.farCrest)}`);
+  const runs = raw.map(r => ({ run: `${r.cfg.cut} m ${r.cfg.mode}`, result: r.result, airT: +r.airT.toFixed(3), aboveLip: +r.aboveLip.toFixed(3),
+    landed: r.landed == null ? null : +r.landed.toFixed(2), farCrest: +r.farCrest.toFixed(2), speedRatio: +r.speedRatio.toFixed(3), maxT: +r.maxT.toFixed(3) }));
+  return { runs, misses };
+}
+// Riding across the trough with Space held (the line loaded), from the middle toward the far wake, at rest and at 7 m/s
+// sideways (as after a short landing): the ripples and the prop-wash boil mustn't launch the rider anywhere in the
+// trough, before the foot of the far wake's back face (going out over the far wake loaded is a jump: that's fine).
+// Freezes the game like bench(), so run it last.
+/* global stepRider, resetRider, BOAT_SPEED, simTime */
+export function checkTrough() {
+  physics = function () {}; gatherInput = function () {};
+  const bad = [], dt = 1 / 120;
+  for (const v0 of [0, 4, 7]) for (const side of [1, -1]) {
+    boatZ = 0; simTime = 0; resetRider(); for (let t = 0; t < 0.5; t += dt) { boatZ += BOAT_SPEED * dt; simTime += dt; stepRider(dt); }
+    R.vel.x = side * v0; R.steerIn = side; R.loading = true;
+    for (let t = 0; t < 4; t += dt) {
+      boatZ += BOAT_SPEED * dt; simTime += dt; stepRider(dt);
+      const d = boatZ - STERN_OFF - R.pos.z, xc = crestX(d), foot = xc - (1.3 + 0.04 * d);   // the back face's foot, as in wakeH
+      if (R.state === 'air') { if (Math.abs(R.pos.x) < foot) bad.push(`launched at x=${fmt(R.pos.x)} (back face from ${fmt(foot)}) crossing at ${v0} m/s to ${side > 0 ? 'port' : 'starboard'}`); break; }
+      if (Math.abs(R.pos.x) > xc) break;
+    }
+    R.loading = false; R.steerIn = 0;
+  }
+  return bad;
 }
 
 // Look from anywhere: hold the camera at pos looking at target (the game's camera code is swapped out, since any frame
@@ -347,4 +375,49 @@ export async function checkWater(baseMs = 8.98) {
   if (waterNear.position.x !== 0) bad.push(`grid centred at x=${waterNear.position.x} (want 0, the boat's track)`);
   if (quality === 2 && baseMs) { const g = await bestGpu(); if (g > baseMs * 1.15) bad.push(`gpu ${g} ms on high (want <= ${fmt(baseMs * 1.15)})`); }
   return bad;
+}
+// What counts as a wake jump: taking off within a metre of a crest, not from the dip outside it or the trough inside.
+/* global nearCrest */
+export function checkScoring() {
+  if (typeof nearCrest !== 'function') return ['nearCrest(u, d) missing'];
+  const d = 16.5, xc = crestX(d), bad = [];
+  for (const [u, want, what] of [[xc - 0.3, true, 'the lip, just inside'], [-(xc + 0.4), true, 'the ramp below the lip'], [xc + 2.1, false, 'the dip outside'],
+    [0, false, 'the middle of the trough'], [-(xc - 1.6), false, 'the foot of the back face'], [xc + 6, false, 'the flats']])
+    if (nearCrest(u, d) !== want) bad.push(`${what} (u=${fmt(u)}): ${!want ? 'counts' : "doesn't count"} as a wake takeoff`);
+  return bad;
+}
+// The rest of jump_bench.py, in the page: its TRICKS, CRASHES and GRABS tables, read from the .py and judged the same
+// way, after bench()'s runs. Returns { misses } (empty when the whole bench passes) and the rows. Freezes the game.
+export async function benchAll() {
+  const src = await (await fetch('/tools/jump_bench.py?' + Date.now())).text();
+  const js = src.split('RUN_JS = """')[1].split('"""')[0], run = (0, eval)('(' + js + ')');
+  const table = name => (0, eval)('[' + src.split(`\n${name} = [`)[1].split('\n]')[0]
+    .replace(/\((-?\d+), (True|False)\)/g, '[$1, $2]').replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null') + ']');
+  const crashT = [...src.split('CRASH_TARGETS = [')[1].split(']\n')[0].matchAll(/\("(\w+)", "([^"]+)", (-?[\d.]+), (-?[\d.]+)\)/g)].map(m => [m[1], m[2], +m[3], +m[4]]);
+  const crashOk = c => crashT.every(([k, , lo, hi]) => c[k] >= lo && c[k] <= hi);
+  const b = await bench(), misses = [...b.misses], rows = {};
+  rows.tricks = table('TRICKS').map(tr => {
+    const r = run({ cut: 6, mode: 'pop', trick: tr }), per = tr.axis === 'spin' ? 180 : 360, landsAs = Math.round(r.rot / per) * per, rode = r.result === 'landed';
+    const [wantRot, wantRide] = tr.expect, ok = rode === wantRide && (landsAs === wantRot || !wantRide);
+    if (!ok) misses.push(`trick ${tr.name}: turned ${Math.round(r.rot)}, lands as ${landsAs}, ${rode ? 'rode away' : r.failReason || r.result}`);
+    return { name: tr.name, rot: Math.round(r.rot), landsAs, rode, landing: r.landingSpeed && +r.landingSpeed.toFixed(2) };
+  });
+  rows.crashes = table('CRASHES').map(spec => {
+    const r = run({ cut: 3, mode: 'pop', trick: spec.trick, follow: true }), c = r.crash;
+    let ok = !!c && (r.failReason || '').includes(spec.reason) && crashOk(c);
+    if (c && spec.fall === 'up') ok = ok && c.chest > 0.3; if (c && spec.fall === 'down') ok = ok && c.chest < -0.3;
+    if (!ok) misses.push(`crash ${spec.name}: ${c ? JSON.stringify(Object.fromEntries(Object.entries(c).map(([k, v]) => [k, +v.toFixed(2)]))) : 'no crash'} ${r.failReason || r.result}`);
+    return { name: spec.name, reason: r.failReason, crash: c };
+  });
+  const plain = b.runs.find(r => r.run === '6 m pop');
+  rows.grabs = table('GRABS').map(g => {
+    const until = g.until === 'late' ? plain.airT - 0.12 : g.until;
+    const r = run({ cut: 6, mode: 'pop', grab: { name: g.grab, from: g.from, until }, follow: !g.ride });
+    const text = (r.shown || []).filter((x, i) => i % 2 === 0 && x).join(' | '), rode = r.result === 'landed';
+    let ok = rode === g.ride && g.has.every(h => text.includes(h)) && !g.not.some(n => text.includes(n));
+    if (r.crash) ok = ok && crashOk(r.crash);
+    if (!ok) misses.push(`grab ${g.name}: ${rode ? 'rode away' : r.failReason || r.result}, "${text}"`);
+    return { name: g.name, text, rode };
+  });
+  return { misses, runs: b.runs, ...rows };
 }

@@ -512,7 +512,7 @@ const GRIP=8.5, A_MAX=8.5, DRAG=0.03, EDGE_LD=3.0; // the edge's side force come
 // the body (charge L, harder off a bigger pop); after that the same inputs only change body shape. Holding the rotation
 // tucks (spins about 1.7x faster, inverts nearly 3x), letting go relaxes, pushing the other way opens up to slow it for
 // the landing. Rate = L / I(shape). I is in kg m^2 (diver and rider estimates); L in those units times degrees/s.
-const ROT={spin:{open:3.8,tight:2.0,Lmax:1100,period:180},flip:{open:13,tight:4.5,Lmax:1750,period:360},roll:{open:13,tight:4.5,Lmax:1750,period:360}};
+const ROT={spin:{open:3.8,tight:2.0,Lmax:960,period:180},flip:{open:13,tight:4.5,Lmax:1450,period:360},roll:{open:13,tight:4.5,Lmax:1450,period:360}};
 const TAKEOFF_WINDOW=0.45, CHARGE_TIME=0.25; // when a rotation can still be started after leaving the lip; how long a full one takes to wind in
 const ASSIST_MAX=25;          // degrees: the most the rider can reorient in the last moment before landing
 const RIDER_M=80;            // rider plus board, kg
@@ -581,6 +581,8 @@ function wakeH(u,d,ph=0){
   return smoothstep(0,0.6,d)*h;
 }
 const crestX = d => 1.1 + Math.max(0,d)*0.155;
+// a takeoff counts as a wake jump within a metre of a crest: not from the dip outside it or the trough inside
+function nearCrest(u,d){ return Math.abs(Math.abs(u)-crestX(d))<1; }
 // the stern's place on the lake, reduced: what wakeH and the shaders' uWakePh take as ph
 const wakePh = boatZ => { const z=(boatZ-STERN_OFF)%WAKE_PH_PERIOD; return z<0?z+WAKE_PH_PERIOD:z; };
 function ambientH(x,z,t){ return 0.045*Math.sin(x*0.5+z*0.25+t*1.1)+0.035*Math.sin(x*0.22-z*0.45+t*0.8)+0.015*Math.sin((x+z)*1.2+t*2.0); }
@@ -2726,7 +2728,7 @@ function resetRider(){
 }
 function takeoff(vy,popped){
   R.state='air'; R.airT=0; R.vel.y=vy; R.spin=R.flip=R.roll=0; R.spinVel=R.flipVel=R.rollVel=0; R.maxH=0;
-  R.takeoffU=R.pos.x; R.takeoffWake=Math.abs(wakeH(R.pos.x,boatZ-STERN_OFF-R.pos.z))>0.12;
+  R.takeoffU=R.pos.x; R.takeoffWake=nearCrest(R.pos.x,boatZ-STERN_OFF-R.pos.z);
   R.takeoffYaw=R.travelYaw+(R.switchStance?Math.PI:0);
   R.baseQuat.copy(R.renderQuat); R.loading=false; R.load=0; R.popped=!!popped; R.spinArmed=R.steerIn===0;
   for(const k in R.L){ R.L[k]=0; R.charge[k]=0; R.chargeT[k]=0; } R.shape=0.3;
@@ -2763,12 +2765,12 @@ function stepRider(dt){
     // For the rider to balance, their centre of mass has to sit on this line, so the pose leans along it.
     _fw.set(nx*aLat-hx*dragA, G+clamp(aReq,-G,3*G), nz*aLat-hz*dragA); R.fw.lerp(_fw,1-Math.exp(-dt/0.06));
     R.landComp=Math.max(0,R.landComp-dt*2.2);
-    // Pop: let go on the way up a wake and the legs extend through the lip, adding 0.5-1.5 m/s for the next
+    // Pop: let go on the way up a wake and the legs extend through the lip, adding 0.5-2.25 m/s for the next
     // ~0.35 s; let go on flat water and it's an ollie. The wake does most of the lifting: when the surface
     // drops away faster than gravity (the lip), the board leaves with the speed it had going up the ramp.
     R.popT=Math.max(0,R.popT-dt);
     if(R.popRequest){ R.popRequest=false;
-      if(vyS>0.8){ R.popArm=0.5+1.0*R.load; R.popT=0.35; R.load=0; }
+      if(vyS>0.8){ R.popArm=0.5+1.75*R.load; R.popT=0.35; R.load=0; }
       else { takeoff(Math.max(vyS,0)+1.6+1.4*R.load,true); R.load=0; } }
     // A committed rider (loading, or popping) stands tall and keeps all of the ramp's lift; a relaxed one soaks it up.
     if(R.state==='riding' && vyUp>1.5 && aReq<-G){
@@ -2883,7 +2885,7 @@ function land(h){
   scoreTrick({spin:spinN,flip:flipN,roll:rollN,spinErr,flipErr,rollErr,vn,inside,halfTurns,late});
 }
 function scoreTrick(t){
-  const parts=[]; let pts=50; const w2w=R.takeoffWake && !t.inside && Math.sign(R.pos.x)===-Math.sign(R.takeoffU||1) && Math.abs(R.pos.x)>1.5;
+  const parts=[]; let pts=50; const w2w=R.takeoffWake && !t.inside && Math.sign(R.pos.x)===-Math.sign(R.takeoffU||1); // !inside: down on or past the far crest
   // a grab counts once the hand is on the board and pays for every second it stays there; the full tweak pays more
   let held=0;
   for(const k of ['Melon','Indy','Nose','Tail']){ if(R.grabTop[k]<GRAB_CATCH)continue;
