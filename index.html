@@ -842,7 +842,7 @@ const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP),waterMaterial(1));
 const waterFar=new THREE.Mesh(gridGeometry(9000,9000,1500),waterMaterial(0)); waterFar.frustumCulled=false; waterFar.position.y=-0.02; scene.add(waterFar);
 // quality: 2 high, 1 medium, 0 low. Auto mode steps down when frames run long, back up when there is headroom.
 const QUALITY=[
-  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.3,treeFar:60,treeHide:900,reflTrees:0,spray:0.25,sprayN:4096,props:false},
+  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.3,treeFar:-1e9,treeHide:900,reflTrees:0,spray:0.25,sprayN:4096,props:false},
   {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.55,treeFar:180,treeHide:1200,reflTrees:550,spray:0.6,sprayN:8192,props:true},
   {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,treeFar:350,treeHide:1550,reflTrees:1550,spray:1,sprayN:16384,props:true}];
 const waterGeos={}; let quality=2, qualityAuto=true, frameEMA=1/60, qualityTimer=0;
@@ -1026,7 +1026,7 @@ function atlasUV(cell,u,v){ const m=0.015; u=m+u*(1-2*m); v=m+v*(1-2*m); return 
 
 // A small mesh builder: positions, normals, atlas uvs, a grey vertex colour for occlusion, and aSway (0 at the base,
 // 1 at the tips; negative on bark, so the shader can tell leaves from wood)
-function treeBuilder(crown){
+function treeBuilder(crown,lod=2){   // lod tags the geometry for the near/far hand-over: 0 near, 1 far, 2 always drawn
   const b={p:[],n:[],uv:[],c:[],s:[],idx:[],crown};
   b.vert=(P,N,uv,ao,sw)=>{ b.p.push(P.x,P.y,P.z); b.n.push(N.x,N.y,N.z); b.uv.push(uv[0],uv[1]); b.c.push(ao,ao,ao); b.s.push(sw); return b.p.length/3-1; };
   b.leafAO=P=>{ const r=Math.hypot(P.x-crown.c.x,P.z-crown.c.z)/crown.r, h=clamp((P.y-crown.y0)/(crown.y1-crown.y0),0,1); return clamp(0.12+0.5*Math.min(r,1.1)+0.4*h,0.12,1.0); };
@@ -1055,7 +1055,8 @@ function treeBuilder(crown){
   b.geometry=()=>{ const g=new THREE.BufferGeometry();
     g.setAttribute('position',new THREE.Float32BufferAttribute(b.p,3)); g.setAttribute('normal',new THREE.Float32BufferAttribute(b.n,3));
     g.setAttribute('uv',new THREE.Float32BufferAttribute(b.uv,2)); g.setAttribute('color',new THREE.Float32BufferAttribute(b.c,3));
-    g.setAttribute('aSway',new THREE.Float32BufferAttribute(b.s,1)); g.setIndex(b.idx); g.computeBoundingSphere(); return g; };
+    g.setAttribute('aSway',new THREE.Float32BufferAttribute(b.s,1)); g.setAttribute('aLod',new THREE.Float32BufferAttribute(new Array(b.s.length).fill(lod),1));
+    g.setIndex(b.idx); g.computeBoundingSphere(); return g; };
   return b;
 }
 const TREE_KINDS=['spruce','pine','broadleaf','birch','willow'];
@@ -1063,7 +1064,7 @@ const TREE_KINDS=['spruce','pine','broadleaf','birch','willow'];
 function treeGeometry(kind,lod,seed){
   const rnd=mulberry32(seed*7919+lod*31+TREE_KINDS.indexOf(kind)*104729), far=lod>0;
   if(kind==='spruce'){
-    const H=11, b=treeBuilder({c:V3(0,4.5,0),r:2.9,y0:1.2,y1:H});
+    const H=11, b=treeBuilder({c:V3(0,4.5,0),r:2.9,y0:1.2,y1:H},lod);
     b.limb(V3(0,-0.4,0),V3(0,H*0.96,0),0.24,0.03,far?4:6,false);
     const levels=far?5:9, per=far?4:6;
     for(let l=0;l<levels;l++){ const t=(l+0.5)/levels, y=1.5+t*(H*0.9-1.5), L=(0.4+2.6*Math.pow(1-t,0.95))*(far?1.2:1), rot=rnd()*6.283;
@@ -1075,7 +1076,7 @@ function treeGeometry(kind,lod,seed){
     return b.geometry();
   }
   if(kind==='pine'){
-    const H=15, b=treeBuilder({c:V3(0,H*0.82,0),r:3.2,y0:H*0.62,y1:H});
+    const H=15, b=treeBuilder({c:V3(0,H*0.82,0),r:3.2,y0:H*0.62,y1:H},lod);
     const lean=V3((rnd()-0.5)*0.8,0,(rnd()-0.5)*0.8), mid=V3(lean.x*0.4,H*0.5,lean.z*0.4), top=V3(lean.x,H*0.97,lean.z);
     b.limb(V3(0,-0.4,0),mid,0.3,0.2,far?4:6,false); b.limb(mid,top,0.2,0.05,far?4:6,false);
     const limbs=far?4:7;
@@ -1089,7 +1090,7 @@ function treeGeometry(kind,lod,seed){
   }
   if(kind==='broadleaf'||kind==='birch'){
     const birch=kind==='birch', H=birch?13:15, cy=H*(birch?0.64:0.6), R=birch?2.4:5.0, Ry=birch?4.0:4.4;
-    const b=treeBuilder({c:V3(0,cy,0),r:R,y0:cy-Ry,y1:cy+Ry});
+    const b=treeBuilder({c:V3(0,cy,0),r:R,y0:cy-Ry,y1:cy+Ry},lod);
     const lean=birch?V3((rnd()-0.5)*1.2,0,(rnd()-0.5)*1.2):V3();
     const fork=V3(lean.x*0.5,H*(birch?0.5:0.42),lean.z*0.5);
     b.limb(V3(0,-0.4,0),fork,birch?0.17:0.38,birch?0.12:0.28,far?4:6,birch);
@@ -1103,7 +1104,7 @@ function treeGeometry(kind,lod,seed){
     return b.geometry();
   }
   // willow: a short thick trunk, a low dome and a curtain of hanging strands
-  const H=8, cy=H*0.72, R=4.4, b=treeBuilder({c:V3(0,cy,0),r:R,y0:1,y1:H});
+  const H=8, cy=H*0.72, R=4.4, b=treeBuilder({c:V3(0,cy,0),r:R,y0:1,y1:H},lod);
   const lean=V3((rnd()-0.5)*1.4,0,(rnd()-0.5)*1.4), fork=V3(lean.x*0.6,H*0.42,lean.z*0.6);
   b.limb(V3(0,-0.4,0),fork,0.45,0.3,far?4:6,false);
   for(let i=0;i<3;i++){ const a=i/3*6.283+rnd(); b.limb(fork,V3(Math.cos(a)*2.4+lean.x,cy+0.6,Math.sin(a)*2.4+lean.z),0.22,0.09,far?3:5,false); }
@@ -1115,18 +1116,25 @@ function treeGeometry(kind,lod,seed){
   return b.geometry();
 }
 const TREE_GEO={}; for(const k of TREE_KINDS)TREE_GEO[k]=[treeGeometry(k,0,1),treeGeometry(k,1,1)];
-const treeUniforms={uTime:{value:0}};
+const treeUniforms={uTime:{value:0},uLodFar:{value:350},uLodBand:{value:70},uLodOn:{value:1}};
 const treeMat=new THREE.MeshStandardMaterial({map:foliageAtlas,vertexColors:true,alphaTest:0.42,alphaToCoverage:true,side:THREE.DoubleSide,roughness:0.88,metalness:0});
 treeMat.onBeforeCompile=sh=>{
-  sh.uniforms.uTime=treeUniforms.uTime;
-  sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute float aSway; uniform float uTime; varying float vLeaf;')
+  Object.assign(sh.uniforms,treeUniforms);
+  sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute float aSway; attribute float aLod; uniform float uTime; uniform float uLodFar; uniform float uLodBand; uniform float uLodOn; varying float vLeaf; varying float vLodCut; varying float vLodSide;')
     .replace('#include <begin_vertex>',`#include <begin_vertex>
       vLeaf=step(0.0,aSway);
+      vec3 wp0=(modelMatrix*instanceMatrix*vec4(0.0,0.0,0.0,1.0)).xyz;   // the tree's own base
       { float s=abs(aSway); s*=s*0.12;
-        vec3 wp0=(modelMatrix*instanceMatrix*vec4(0.0,0.0,0.0,1.0)).xyz;   // the tree's own base, so each tree has its own phase
-        float ph=uTime*1.3+dot(wp0.xz,vec2(0.21,0.17))+transformed.y*0.35;
-        transformed.x+=s*sin(ph); transformed.z+=s*0.6*cos(ph*0.83+1.7); }`);
-  sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\nvarying float vLeaf;')
+        // each tree its own phase, from where it stands; z wraps every period (a whole number of turns), so the phase
+        // stays small however far down the course, and matches across the forward snap
+        float ph=uTime*1.3+wp0.x*0.21+fract(wp0.z/${LAND_P}.0)*${(2*Math.PI*153).toFixed(4)}+transformed.y*0.35;
+        transformed.x+=s*sin(ph); transformed.z+=s*0.6*cos(ph*0.83+1.7); }
+      // near and far versions of a tree hand over across a band of distance, each tree on its own, dithered
+      vLodCut=uLodOn>0.5?smoothstep(uLodFar-0.5*uLodBand,uLodFar+0.5*uLodBand,abs(wp0.z-cameraPosition.z)):1.0; vLodSide=aLod;`);
+  sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\nvarying float vLeaf; varying float vLodCut; varying float vLodSide;')
+    .replace('#include <clipping_planes_fragment>',`#include <clipping_planes_fragment>
+      if(vLodSide<1.5){ float ign=fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(0.06711056,0.00583715))));
+        if(vLodSide<0.5?ign<vLodCut:ign>=vLodCut) discard; }`)
     // leaf normals come from the crown, the same both sides of a card
     .replace('#include <normal_fragment_begin>',THREE.ShaderChunk.normal_fragment_begin.replace('normal *= faceDirection;','normal *= mix(faceDirection,1.0,vLeaf);'))
     // smaller mips average the leaves away; hold the coverage up so a far tree doesn't go thin
@@ -1174,14 +1182,17 @@ const trees=[];
     g.forEach(({t,z},i)=>{ _p.set(t.side*t.ax,t.y-t.sink,z); _q.setFromAxisAngle(UP,t.rot); _s.set(t.sc,t.sc*t.sy,t.sc); _m.compose(_p,_q,_s); mesh.setMatrixAt(i,_m); mesh.setColorAt(i,_c.setRGB(...t.tint)); });
     mesh.instanceMatrix.needsUpdate=true; mesh.instanceColor.needsUpdate=true;
     mesh.computeBoundingSphere(); mesh.frustumCulled=true;
-    mesh.userData={kind,side:0,chunk:+ci,full:g.length,zmid:-LAND_P*SHORE_SPAN/2+(+ci+0.5)*TREE_CHUNK,lod:0};
-    shore.add(mesh); trees.push(mesh); }
+    const far=new THREE.InstancedMesh(TREE_GEO[kind][1],treeMat,g.length);   // the cheaper trees, the same instances
+    far.instanceMatrix=mesh.instanceMatrix; far.instanceColor=mesh.instanceColor; far.boundingSphere=mesh.boundingSphere.clone(); far.frustumCulled=true;
+    mesh.userData={kind,side:0,chunk:+ci,full:g.length,zmid:-LAND_P*SHORE_SPAN/2+(+ci+0.5)*TREE_CHUNK,far,d:0};
+    shore.add(mesh); shore.add(far); trees.push(mesh); }
 }
-function setTreeDensity(f){ for(const m of trees)m.count=Math.round(m.userData.full*f); }
-// the water's reflection is blurred anyway: draw it with the cheap trees (and on medium only the nearer ones), then put
-// everything back
-function treesFar(on){ const r=QUALITY[quality].reflTrees;
-  for(const m of trees){ m.geometry=TREE_GEO[m.userData.kind][on?1:m.userData.lod]; m.visible=on?m.userData.d<r:m.userData.d<QUALITY[quality].treeHide; } }
+function setTreeDensity(f){ for(const m of trees)m.count=m.userData.far.count=Math.round(m.userData.full*f); }
+// the water's reflection is blurred anyway: draw it with the cheap trees only (and on medium only the nearer ones), then
+// put everything back
+function treesFar(on){ const r=QUALITY[quality].reflTrees; treeUniforms.uLodOn.value=on?0:1;
+  for(const m of trees){ const f=m.userData.far;
+    if(on){ m.userData.was=[m.visible,f.visible]; m.visible=false; f.visible=m.userData.d<r; } else [m.visible,f.visible]=m.userData.was; } }
 // ---------- props on the banks: rocks, reeds, jetties with boats tied up, a boathouse ----------
 // One period's worth, copied along the whole bank like the trees. Everything but the reeds is one merged mesh; rocks
 // and reeds are instanced. The low quality setting leaves them out.
@@ -1263,13 +1274,16 @@ function buildProps(){
   group.userData={jetties,boathouses:houses}; return group;
 }
 const props=buildProps(); shore.add(props);
-// a chunk far enough down the course (along z) swaps to the cheaper trees, and one beyond the ridge isn't drawn (nor
-// is the ground under it)
+// Which version of each chunk to draw: the near trees where any of it is inside the hand-over band's far edge, the far
+// ones where any of it is beyond the near edge (both, while a chunk straddles the band; the shader dissolves each tree
+// from one to the other by its own distance). Past treeHide a chunk isn't drawn, nor the ground under it: on high
+// that's behind the nearer ridge (1.5 km); on the lower settings it's in the haze, where the bank's far end can show.
+const TREE_BAND=70;
 function updateTreeLod(){
   const Q=QUALITY[quality], far=Q.treeFar, hide=Q.treeHide, cz=camera.position.z-shore.position.z;
-  for(const m of trees){ const d=Math.abs(cz-m.userData.zmid)-TREE_CHUNK/2, lod=d>far?1:0; m.userData.d=d;
-    m.visible=d<hide;   // past the nearer ridge (1.5 km) a chunk can't be seen; on the lower settings the haze has the last stretch
-    if(lod!==m.userData.lod){ m.userData.lod=lod; m.geometry=TREE_GEO[m.userData.kind][lod]; } }
+  treeUniforms.uLodFar.value=far; treeUniforms.uLodBand.value=TREE_BAND;
+  for(const m of trees){ const a=Math.abs(cz-m.userData.zmid), d=a-TREE_CHUNK/2; m.userData.d=d;
+    m.visible=d<hide && d<far+TREE_BAND/2; m.userData.far.visible=d<hide && a+TREE_CHUNK/2>far-TREE_BAND/2; }
   for(const g of landParts) g.visible=Math.abs(cz-g.userData.zmid)-LAND_P/2<hide;   // and the ground with them
 }
 // Far hills: three wooded ridges round the camera, each lying back up its slope so the sun shades it, with a tree-lined

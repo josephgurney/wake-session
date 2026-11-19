@@ -94,9 +94,14 @@ export function checkTrees() {
   const bad = [];
   if (typeof treeGeometry !== 'function' || typeof paintFoliageAtlas !== 'function' || typeof updateTreeLod !== 'function') return ['treeGeometry / paintFoliageAtlas / updateTreeLod'];
   if (TREE_CHUNK !== 450) bad.push('TREE_CHUNK');
+  // the sway phase must stay small far down the course (sin() of a huge world coordinate goes NaN on fast-math GPUs)
+  /* global treeMat */
+  if (!/fract\(wp0\.z\//.test(treeMat.onBeforeCompile.toString())) bad.push('tree sway phase uses the raw world position');
+  // near and far trees hand over smoothly: every chunk has a far twin sharing its instances
+  if (trees.some(m => !m.userData.far || m.userData.far.instanceMatrix !== m.instanceMatrix)) bad.push('chunks need a far twin sharing their instances');
   for (const k of TREE_KINDS) for (const lod of [0, 1]) {
     const g = treeGeometry(k, lod, 1);
-    for (const a of ['position', 'normal', 'uv', 'color', 'aSway']) if (!g.attributes[a]) bad.push(`${k} lod${lod} has no ${a}`);
+    for (const a of ['position', 'normal', 'uv', 'color', 'aSway', 'aLod']) if (!g.attributes[a]) bad.push(`${k} lod${lod} has no ${a}`);
   }
   const kinds = new Set(trees.map(m => m.userData.kind));
   for (const k of ['spruce', 'pine', 'broadleaf', 'birch', 'willow']) if (!kinds.has(k)) bad.push(`no ${k} planted`);
@@ -156,12 +161,34 @@ export function checkQuality() {
     if (trees.some(m => m.count !== Math.round(m.userData.full * Q.trees))) bad.push(`tree density off on ${Q.name}`);
     if (spray.rate !== Q.spray) bad.push(`spray rate ${spray.rate} on ${Q.name}`);
     if (props.visible !== Q.props) bad.push(`props ${props.visible} on ${Q.name}`);
-    const far = Q.treeFar, cz = camera.position.z - shore.position.z;
-    if (trees.some(m => (Math.abs(cz - m.userData.zmid) - 225 > far ? 1 : 0) !== m.userData.lod)) bad.push(`tree detail off on ${Q.name}`);
+    const cz = camera.position.z - shore.position.z;
+    for (const m of trees) { const a = Math.abs(cz - m.userData.zmid), dmin = a - 225, dmax = a + 225; if (dmin >= Q.treeHide) continue;
+      if (m.visible !== dmin < Q.treeFar + 35 || m.userData.far.visible !== dmax > Q.treeFar - 35) { bad.push(`tree detail off on ${Q.name}`); break; } }
+    if (quality === 0 && trees.some(m => m.visible)) bad.push('low should only draw the simple trees');
   }
   if (!seen[3].includes('auto')) bad.push(`fourth press should return to auto, got "${seen[3]}"`);
   if (renderer.info.programs.length !== progs0) bad.push(`changing setting compiled ${renderer.info.programs.length - progs0} new shader(s)`);
   return { bad, seen };
+}
+
+// A tree detail change mustn't pop: hold the long lens still where a chunk sits right at the high setting's detail
+// distance, nudge that distance 0.6 m either way (what riding 0.6 m does), and count the pixels that change a lot.
+// A whole chunk swapping at once changes thousands; a smooth hand-over almost none. Returns the share of the frame, %.
+/* global sky, hills */
+export function lodPop() {
+  setQuality(2); const gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, Q = QUALITY[2], far0 = Q.treeFar;
+  const cz = 225 - 225 - far0;   // the chunk centred on z = 225 is at the detail distance from here
+  const frame = far => {
+    Q.treeFar = far;
+    camera.position.set(0, 2.6, cz); camera.lookAt(70, 5, cz + 330); camera.fov = 19; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+    sky.position.copy(camera.position); hills.position.set(0, 0, cz); shore.position.z = Math.round(cz / LAND_P) * LAND_P;
+    updateTreeLod(); renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost();
+    const px = new Uint8Array(W * H * 4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px); return px;
+  };
+  const changed = (a, b) => { let n = 0; for (let i = 0; i < a.length; i += 4) if (Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2])) > 24) n++; return 100 * n / (a.length / 4); };
+  const pct = changed(frame(far0 - 0.3), frame(far0 + 0.3)), same = changed(frame(far0 + 0.3), frame(far0 + 0.3));
+  Q.treeFar = far0; updateTreeLod(); cam.snap = true; step(0.05);
+  return { changedPct: +pct.toFixed(3), noisePct: +same.toFixed(3) };
 }
 
 const RUNS = [{ cut: 3, mode: 'relaxed' }, { cut: 3, mode: 'hold' }, { cut: 3, mode: 'pop' }, { cut: 6, mode: 'hold' }, { cut: 6, mode: 'pop' }];
