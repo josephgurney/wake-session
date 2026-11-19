@@ -447,7 +447,7 @@ export const FOAM_REGIONS = [
   { name: 'crest40', crest: true, u: [-0.4, 0.2], d: [38, 43], want: [5, 100] },
   { name: 'crest80', crest: true, u: [-0.4, 0.2], d: [78, 83], want: [0, 5] },
   { name: 'face20', crest: true, u: [0.5, 1.5], d: [18, 23], want: [0, 10] },
-  { name: 'lace10', crest: true, u: [-3, -1], d: [8, 12], want: [10, 50] },
+  { name: 'lace20', crest: true, u: [-2.2, -1], d: [18, 23], want: [10, 50] },
   { name: 'lace60', crest: true, u: [-3, -1], d: [58, 62], want: [0, 10] },
   { name: 'flats', crest: true, u: [4, 6], d: [18, 23], want: [0, 2] },
 ];
@@ -479,9 +479,11 @@ export function foamCover(regions = FOAM_REGIONS) {
   camera.quaternion.copy(q0); camera.fov = fov0; camera.updateProjectionMatrix(); cam.snap = true; step(0.05);
   return out;
 }
-// every region outside the share of foam it should have
-export function checkFoam() {
-  const got = foamCover(), bad = [];
+// every region outside the share of foam it should have, averaged over n moments half a second apart (the foam's pattern
+// is fixed to the lake, so a few square metres can be lucky or unlucky at any one moment)
+export function checkFoam(n = 4) {
+  const runs = []; for (let i = 0; i < n; i++) { if (i) step(0.55); runs.push(foamCover()); }
+  const got = Object.fromEntries(Object.keys(runs[0]).map(k => [k, +(runs.reduce((s, r) => s + r[k], 0) / n).toFixed(1)])), bad = [];
   for (const r of FOAM_REGIONS) { const v = got[r.name]; if (!(v >= r.want[0] && v <= r.want[1])) bad.push(`${r.name} ${v}% (want ${r.want[0]}-${r.want[1]})`); }
   return bad;
 }
@@ -500,5 +502,13 @@ export function overhead(u = 0, d = 20, h = 14, fov = 54) {
   camera.fov = fov; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
   waterNear.position.set(0, 0, Math.round(z / WATER_SP) * WATER_SP); waterFar.position.set(u, -0.02, z);
   const hw = waterNear.geometry.userData.half; waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x, waterNear.position.z, hw[0] - 1, hw[1] - 1);
-  renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost();
+  renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost(); flick();
 }
+// a hidden pane only repaints when the page visibly changes, and a new WebGL frame alone doesn't count: flick a dot
+export function flick() {
+  let dot = document.getElementById('probe-dot');
+  if (!dot) { dot = document.createElement('div'); dot.id = 'probe-dot'; dot.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;z-index:99;pointer-events:none'; document.body.appendChild(dot); }
+  dot.style.background = ++stepN % 2 ? '#010101' : '#020202';
+}
+// a frozen still from one of the game's cameras (0 follow, 1 long lens, 2 tower)
+export function still(mode) { freeze(false); hud(false); view(mode); freeze(true); renderer.shadowMap.needsUpdate = true; renderReflection(); renderPost(); flick(); }

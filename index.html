@@ -571,6 +571,57 @@ vec2 wake(float u, float d, float ph){
 float ambient(float x, float z, float t){
   return 0.045*sin(x*0.5+z*0.25+t*1.1) + 0.035*sin(x*0.22-z*0.45+t*0.8) + 0.015*sin((x+z)*1.2+t*2.0);
 }`;
+// Whitewater, for the water shader (needs NOISE_GLSL, WAKE_GLSL, uTime, uDetail). The wake is steady in the boat's frame,
+// so where foam sits and how old it is come from the formula. C(d) is how hard the crest is breaking d metres behind the
+// transom. The cap is white across the crest; lace is what it leaves behind: water crosses the crest a = -s/0.155 m of
+// travel ago (the crest moves out 0.155 m a metre), at d0 = d - a, carrying C(d0) of foam that fades over L metres
+// (about 2 s). Water inside the transom's width never crosses a crest. The middle is the prop wash, wide and long.
+// Every pattern is in lake coordinates, so the foam streams back past the boat instead of riding along with it.
+const FOAM_GLSL = `
+float crestStrength(float d){ return smoothstep(0.3, 2.0, d)*(0.42 + 0.58*exp(-d/12.0))*(1.0 - smoothstep(38.0, 68.0, d)); }
+// (cap, lace, middle): how strong each is here, 0 to 1
+vec3 foamMasks(float u, float d, WakeK k){
+  float au = abs(u), s = au - k.xc, C = crestStrength(d);
+  float cap = s >= 0.0 ? 1.0 - smoothstep(0.0, 0.3 + 0.35*exp(-d/8.0), s) : 1.0 - smoothstep(0.1, 1.0, -s);
+  cap *= C;
+  float lc = 0.0;
+  if (s < 0.0 && au > 1.1) { float a = -s/0.155, d0 = d - a; if (d0 > 0.3) lc = min(1.0, 1.4*crestStrength(d0)*exp(-a/26.0))*smoothstep(0.2, 0.9, -s); }
+  float hw = 0.9 + 0.028*d;
+  float mid = (1.0 - smoothstep(0.45*hw, hw, au))*smoothstep(0.0, 1.2, d)*(0.4 + 0.6*exp(-d/11.0))*(1.0 - smoothstep(90.0, 170.0, d));
+  return vec3(cap, lc, mid);
+}
+// m is how strong a layer is, n its pattern (roughly 0 to 1): strong is solid white, weak only the pattern's peaks
+float cover(float m, float n){ return m < 0.02 ? 0.0 : smoothstep(1.0 - m, 1.2 - m, n); }
+// ridged noise: bright where the noise crosses its middle, so raised to a power it draws veins
+float ridge(vec2 p){ return 1.0 - abs(2.0*vnoise(p) - 1.0); }
+const mat2 FOAM_ROT = mat2(0.8, 0.6, -0.6, 0.8);
+// foam drawn out along the track in veins and wisps (the crest lays it down as it runs out at 9 degrees), wobbled
+float streaks(vec2 xz, float t){
+  vec2 p = vec2(xz.x*2.1, xz.y*0.6);
+  p += 0.5*vec2(vnoise(p*0.7 + 3.0), vnoise(p*0.7 + 9.0));
+  return pow(ridge(p + vec2(0.0, t*0.05)), 2.5)*0.6 + pow(ridge(FOAM_ROT*p*2.3 + 5.0), 2.5)*0.4;
+}
+// (coverage, aeration) at lake position xz
+vec2 whitewater(vec2 xz, float u, float d, WakeK k, float dist){
+  vec3 m = foamMasks(u, d, k);
+  float aer = clamp(0.8*m.x + 1.1*m.y + 0.9*m.z, 0.0, 1.0), mm = max(m.x, max(m.y, m.z));
+  if (mm < 0.02) return vec2(0.0, aer);
+  // far off the pattern is finer than a pixel: settle toward its average rather than sparkle (and skip the work)
+  float far = smoothstep(60.0, 220.0, dist);
+  if (far > 0.999) return vec2(0.55*mm, aer);
+  // fine bubbles, warped so they don't line up; one octave on low
+  float f = 0.0, bub = 0.5;
+  if (dist < 70.0) { vec2 bp = xz*9.0 + 1.5*vec2(vnoise(xz*1.9), vnoise(xz*1.9 + 5.0)); bub = uDetail > 0.5 ? 0.55*vnoise(bp) + 0.45*vnoise(xz*19.0 - uTime*0.2) : vnoise(bp); }
+  // the cap: clumps with bubbly holes
+  if (m.x > 0.02) f = max(f, cover(m.x, 0.55*vnoise(vec2(xz.x*2.4, xz.y*0.9) + vec2(0.0, uTime*0.1)) + 0.3*vnoise(xz*5.0 - uTime*0.08) + 0.22*bub));
+  // lace: streaks, in patches
+  if (m.y > 0.02) { float s = streaks(xz + 3.7, uTime); float pt = vnoise(vec2(xz.x*0.6, xz.y*0.2) + 5.3);
+    f = max(f, cover(m.y, s*(0.45 + 0.7*pt)*(0.6 + 0.6*bub))); }
+  // the middle: churn streaked along the track
+  if (m.z > 0.02) { vec2 q = vec2(xz.x*2.0, xz.y*0.4);
+    f = max(f, cover(m.z, 0.4*vnoise(q + vec2(0.0, uTime*0.2)) + 0.25*vnoise(q*2.3 - vec2(uTime*0.1, 0.0)) + 0.38*streaks(xz + 9.1, uTime) + 0.12*bub)); }
+  return vec2(mix(f, 0.55*mm, far), aer);
+}`;
 // The same, line for line, for the physics (tools/probe.js checkWakeGPU() holds them to within a millimetre).
 function wakeTrough(d){ return d<=0?0:0.46*Math.exp(-Math.pow(d/24,1.3)); }
 function wakeH(u,d,ph=0){
@@ -595,6 +646,8 @@ function wakeH(u,d,ph=0){
   return smoothstep(0,0.6,d)*h;
 }
 const crestX = d => 1.1 + Math.max(0,d)*0.155;
+// how hard the crest is breaking d metres behind the transom: FOAM_GLSL's crestStrength, for the crest spray
+const crestStrength = d => smoothstep(0.3,2,d)*(0.42+0.58*Math.exp(-d/12))*(1-smoothstep(38,68,d));
 // a takeoff counts as a wake jump within a metre of a crest: not from the dip outside it or the trough inside
 function nearCrest(u,d){ return Math.abs(Math.abs(u)-crestX(d))<1; }
 // wake to wake: taken off one side, down on the other past the far crest
@@ -781,7 +834,7 @@ function waterMaterial(near){
     vertexShader:`#include <common>
       #include <shadowmap_pars_vertex>
       uniform float uTime; uniform vec3 uBoat; uniform float uWakePh; uniform float uNear; uniform mat4 uTexMat;
-      varying vec3 vWorld; varying vec3 vFoam; varying vec3 vN; varying vec4 vRefl; ${WAKE_GLSL}
+      varying vec3 vWorld; varying vec3 vN; varying vec4 vRefl; ${WAKE_GLSL}
       void main(){
         vec4 wp=modelMatrix*vec4(position,1.0);
         float u=wp.x-uBoat.x; float d=uBoat.z-wp.z;
@@ -794,17 +847,6 @@ function waterMaterial(near){
         // the vertex normal is the chop's alone (as slopes); the wake's is worked out per pixel from the formula
         float e=0.25;
         vN=(uNear>0.5)?vec3((a0-ambient(wp.x+e,wp.z,uTime))/e,1.0,(a0-ambient(wp.x,wp.z+e,uTime))/e):vec3(0.0,1.0,0.0);
-        // foam sources: the lip itself, foam spilling down the inside face, and the prop wash column.
-        // Branch rather than multiply by zero: ahead of the boat the smoothstep edges cross and the result is
-        // undefined, and 0*NaN is still NaN, which then interpolates across whole triangles as white patches.
-        vFoam=vec3(0.0);
-        if(uNear>0.5 && d>0.0 && d<300.0){
-          float xc=1.1+d*0.155; float s=abs(u)-xc;
-          float lip=smoothstep(0.74,0.98,w.y)*smoothstep(0.0,2.5,d)*exp(-d/14.0);
-          float spill=(1.0-smoothstep(0.0,1.6,abs(s+0.9)))*smoothstep(1.0,5.0,d)*exp(-d/20.0)*0.42;
-          float hw=1.1+0.045*d; float wash=(1.0-smoothstep(hw*0.35,hw,abs(u)))*exp(-d/13.0);
-          vFoam=vec3(lip,spill,wash);
-        }
         vWorld=wp.xyz;
         vRefl=uTexMat*wp;
         vec4 worldPosition=wp;
@@ -819,16 +861,13 @@ function waterMaterial(near){
       #include <shadowmap_pars_fragment>
       uniform float uDetail; uniform vec3 uFog; uniform float uFogNear; uniform float uFogFar; uniform sampler2D uRefl; uniform float uReflOn; uniform float uGlit;
       uniform float uNear; uniform vec4 uNearRect; uniform vec3 uBoat; uniform float uWakePh;
-      varying vec3 vWorld; varying vec3 vFoam; varying vec3 vN; varying vec4 vRefl;
-      ${NOISE_GLSL} ${SKY_GLSL} ${WAKE_GLSL}
+      varying vec3 vWorld; varying vec3 vN; varying vec4 vRefl;
+      ${NOISE_GLSL} ${SKY_GLSL} ${WAKE_GLSL} ${FOAM_GLSL}
       // the wake's slope (dh/dx, dh/dz) at this pixel, from the same formula the physics uses, so the lip and ripples
       // shade crisply between vertices and the V carries on down the far plane. Differenced wider with distance, which
       // softens the lip far off rather than letting it sparkle. Along the course the shape mostly just moves out with
       // the crest line (0.155 m per m), so dh/dz is taken from dh/dx: two samples a pixel instead of three.
-      vec2 wakeSlope(vec2 xz, float dist){
-        float u=xz.x-uBoat.x, d=uBoat.z-xz.y;
-        if(d<=0.0) return vec2(0.0);
-        WakeK k=wakeK(d);
+      vec2 wakeSlope(float u, float d, WakeK k, float dist){
         if(abs(u)-k.xc > 2.0*k.W+0.5) return vec2(0.0);
         float e=0.04+dist*0.002;
         float hu=k.ramp*(wakeP(u+e,d,uWakePh,k)-wakeP(u,d,uWakePh,k))/e;
@@ -847,10 +886,18 @@ function waterMaterial(near){
         if(uNear<0.5 && abs(vWorld.x-uNearRect.x)<uNearRect.z && abs(vWorld.z-uNearRect.y)<uNearRect.w)discard;
         vec2 xz=vWorld.xz;
         vec3 toCam=cameraPosition-vWorld; float dist=length(toCam); vec3 V=toCam/dist;
+        // the wake's terms at this pixel, shared by its normal and its foam (behind the transom only)
+        float wu=xz.x-uBoat.x, wd=uBoat.z-xz.y; WakeK wk; if(wd>0.0) wk=wakeK(wd);
         // fine ripple normals from a small animated height field; strength fades with distance so the horizon stays calm
         float e=0.05+dist*0.003; float amp=0.085/(1.0+dist*0.014);
         float c0=chop(xz), cx=chop(xz+vec2(e,0.0)), cz=chop(xz+vec2(0.0,e));
-        vec2 ws=wakeSlope(xz,dist);
+        vec2 ws=wd>0.0 ? wakeSlope(wu,wd,wk,dist) : vec2(0.0);
+        // whitewater: how much foam covers this pixel, and how aerated the water under it is. Worked out in branches,
+        // the derivatives for its lumps outside them (they're undefined inside a branch)
+        vec2 fa=vec2(0.0);
+        if(wd>0.0 && wd<170.0 && abs(wu)-wk.xc<1.0) fa=whitewater(xz,wu,wd,wk,dist);
+        float foam=fa.x, aer=fa.y;
+        vec2 fdx=dFdx(xz), fdy=dFdy(xz); float fgx=dFdx(foam), fgy=dFdy(foam);
         vec3 N=normalize(vec3(vN.x-ws.x+(c0-cx)/e*amp, 1.0, vN.z-ws.y+(c0-cz)/e*amp));
         float shadow=1.0;
         #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
@@ -871,6 +918,9 @@ function waterMaterial(near){
         float back=pow(max(dot(-V,uSun),0.0),2.0);
         float sss=clamp(lift*(0.35+0.65*back)*0.9,0.0,1.0);
         vec3 water=mix(deep,scatter,sss)*(0.55+0.45*sunN*shadow)*(0.8+0.2*shadow);
+        // aerated water: bubbles under and around the foam scatter light back up, pale turquoise, and dull the reflection
+        water=mix(water,vec3(0.09,0.30,0.30)*(0.55+0.45*sunN*shadow)*(0.85+0.15*shadow),aer*0.65);
+        fres*=1.0-0.35*aer;
         vec3 col=mix(water,skyCol,fres);
         // sun glitter: a GGX lobe, roughened with distance so it does not sparkle into aliasing
         vec3 Hh=normalize(V+uSun); float ndh=max(dot(N,Hh),0.0);
@@ -879,15 +929,17 @@ function waterMaterial(near){
         float vh=max(dot(V,Hh),0.0); float F=0.02+0.98*pow(max(1.0-vh,0.0),5.0);
         float spec=min(D*F*uGlit,3.5)*shadow;
         col+=vec3(1.0,0.96,0.88)*spec;
-        // foam: broken by two scales of noise, with the wash streaked along the boat's track
-        float foam=0.0; float fm=0.0; float n1=0.0, n2=0.0, ns=0.0;
-        if(vFoam.x+vFoam.y+vFoam.z>0.002){
-          n1=vnoise(xz*2.4+vec2(0.0,uTime*0.15)); n2=vnoise(xz*7.5-vec2(uTime*0.12,0.0)); ns=vnoise(vec2(xz.x*5.0,xz.y*0.9)-vec2(0.0,uTime*0.3));
-          fm=vFoam.x*(1.4*n1+0.9*n2-0.25)+vFoam.y*(1.2*n2+0.6*n1-0.55)+vFoam.z*(1.1*ns+0.5*n2-0.25);
-          foam=smoothstep(0.30,0.70,fm);
+        // foam lit as a surface of its own: lumps from the foam's own gradient (screen derivatives turned into lake
+        // ones), a diffuse white under sun and sky, thinner at its edges where the water shows through
+        if(foam>0.001){
+          float det=fdx.x*fdy.y-fdx.y*fdy.x;
+          vec2 gw=abs(det)>1e-9 ? vec2(fgx*fdy.y-fgy*fdx.y, fgy*fdx.x-fgx*fdy.x)/det : vec2(0.0);
+          gw*=0.035/(1.0+dist*0.05);
+          vec3 Nf=normalize(N+vec3(-gw.x,0.0,-gw.y));
+          float sf=max(dot(Nf,uSun),0.0);
+          vec3 foamCol=vec3(0.86,0.91,0.94)*(0.42+0.58*sf*shadow)+vec3(0.05,0.07,0.07)*back*shadow;
+          col=mix(col,foamCol,foam);
         }
-        vec3 foamCol=vec3(0.84,0.90,0.94)*(0.5+0.5*sunN*shadow)+vec3(0.08)*shadow;
-        col=mix(col,foamCol,foam);
         col=mix(col,uFog,smoothstep(uFogNear,uFogFar,dist));
         gl_FragColor=vec4(col,1.0);
       }`});
