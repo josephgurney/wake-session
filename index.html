@@ -764,16 +764,18 @@ function waterMaterial(near){
       #include <shadowmap_pars_vertex>
       uniform float uTime; uniform vec3 uBoat; uniform float uWakePh; uniform float uNear; uniform mat4 uTexMat;
       varying vec3 vWorld; varying vec3 vFoam; varying vec3 vN; varying vec4 vRefl; ${WAKE_GLSL}
-      float H(vec2 xz){ return wake(xz.x-uBoat.x, uBoat.z-xz.y, uWakePh).x + ambient(xz.x,xz.y,uTime); }
       void main(){
         vec4 wp=modelMatrix*vec4(position,1.0);
         float u=wp.x-uBoat.x; float d=uBoat.z-wp.z;
         vec2 w=wake(u,d,uWakePh);
-        float h0=w.x+ambient(wp.x,wp.z,uTime);
-        wp.y=uNear*h0;
+        float a0=ambient(wp.x,wp.z,uTime);
+        // the wake's height fades out over the grid's last few metres, so it meets the flat far plane without a step;
+        // its shape carries on there in the per-pixel normals
+        float edge=(1.0-smoothstep(100.0,114.0,abs(position.z)))*(1.0-smoothstep(60.0,69.0,abs(position.x)));
+        wp.y=uNear*(edge*w.x+a0);
+        // the vertex normal is the chop's alone (as slopes); the wake's is worked out per pixel from the formula
         float e=0.25;
-        float hx=H(wp.xz+vec2(e,0.0)); float hz=H(wp.xz+vec2(0.0,e));
-        vN=(uNear>0.5)?normalize(vec3((h0-hx)/e,1.0,(h0-hz)/e)):vec3(0.0,1.0,0.0);
+        vN=(uNear>0.5)?vec3((a0-ambient(wp.x+e,wp.z,uTime))/e,1.0,(a0-ambient(wp.x,wp.z+e,uTime))/e):vec3(0.0,1.0,0.0);
         // foam sources: the lip itself, foam spilling down the inside face, and the prop wash column.
         // Branch rather than multiply by zero: ahead of the boat the smoothstep edges cross and the result is
         // undefined, and 0*NaN is still NaN, which then interpolates across whole triangles as white patches.
@@ -781,7 +783,7 @@ function waterMaterial(near){
         if(uNear>0.5 && d>0.0 && d<300.0){
           float xc=1.1+d*0.155; float s=abs(u)-xc;
           float lip=smoothstep(0.74,0.98,w.y)*smoothstep(0.0,2.5,d)*exp(-d/14.0);
-          float spill=(1.0-smoothstep(0.0,1.4,abs(s+0.7)))*smoothstep(1.0,5.0,d)*exp(-d/20.0)*0.42;
+          float spill=(1.0-smoothstep(0.0,1.6,abs(s+0.9)))*smoothstep(1.0,5.0,d)*exp(-d/20.0)*0.42;
           float hw=1.1+0.045*d; float wash=(1.0-smoothstep(hw*0.35,hw,abs(u)))*exp(-d/13.0);
           vFoam=vec3(lip,spill,wash);
         }
@@ -798,9 +800,19 @@ function waterMaterial(near){
       #include <lights_pars_begin>
       #include <shadowmap_pars_fragment>
       uniform float uDetail; uniform vec3 uFog; uniform float uFogNear; uniform float uFogFar; uniform sampler2D uRefl; uniform float uReflOn; uniform float uGlit;
-      uniform float uNear; uniform vec4 uNearRect;
+      uniform float uNear; uniform vec4 uNearRect; uniform vec3 uBoat; uniform float uWakePh;
       varying vec3 vWorld; varying vec3 vFoam; varying vec3 vN; varying vec4 vRefl;
-      ${NOISE_GLSL} ${SKY_GLSL}
+      ${NOISE_GLSL} ${SKY_GLSL} ${WAKE_GLSL}
+      // the wake's slope (dh/dx, dh/dz) at this pixel, from the same formula the physics uses, so the lip and ripples
+      // shade crisply between vertices and the V carries on down the far plane. Differenced wider with distance, which
+      // blurs it the way a mip would rather than letting it sparkle.
+      vec2 wakeSlope(vec2 xz, float dist){
+        float u=xz.x-uBoat.x, d=uBoat.z-xz.y;
+        if(d<=-0.5 || abs(u)-(1.1+0.155*max(d,0.0)) > 2.0*(1.3+0.051*max(d,0.0))+0.5) return vec2(0.0);
+        float e=0.04+dist*0.002;
+        float h0=wake(u,d,uWakePh).x;
+        return vec2(wake(u+e,d,uWakePh).x-h0, h0-wake(u,d+e,uWakePh).x)/e;
+      }
       float chop(vec2 p){
         float h=vnoise(p*1.6+vec2(uTime*0.30,uTime*0.10))*0.5;
         h+=vnoise(p*3.7-vec2(uTime*0.18,uTime*0.36))*0.26;
@@ -817,7 +829,8 @@ function waterMaterial(near){
         // fine ripple normals from a small animated height field; strength fades with distance so the horizon stays calm
         float e=0.05+dist*0.003; float amp=0.085/(1.0+dist*0.014);
         float c0=chop(xz), cx=chop(xz+vec2(e,0.0)), cz=chop(xz+vec2(0.0,e));
-        vec3 N=normalize(vec3(vN.x+(c0-cx)/e*amp, 1.0, vN.z+(c0-cz)/e*amp));
+        vec2 ws=wakeSlope(xz,dist);
+        vec3 N=normalize(vec3(vN.x-ws.x+(c0-cx)/e*amp, 1.0, vN.z-ws.y+(c0-cz)/e*amp));
         float shadow=1.0;
         #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
           shadow=getShadow(directionalShadowMap[0],directionalLightShadows[0].shadowMapSize,directionalLightShadows[0].shadowIntensity,directionalLightShadows[0].shadowBias,directionalLightShadows[0].shadowRadius,vDirectionalShadowCoord[0]);
@@ -858,27 +871,35 @@ function waterMaterial(near){
         gl_FragColor=vec4(col,1.0);
       }`});
 }
-function gridGeometry(w,l,sp){
-  const nx=Math.round(w/sp)+1, nz=Math.round(l/sp)+1;
+// A grid w wide and l long, sp between vertices. With fine={half,sp}, the columns within ±half of the centre are fine.sp
+// apart instead (the wake needs about 0.2 m to show a 30 degree lip and its ripples); it reaches exactly ±w/2.
+function gridGeometry(w,l,sp,fine){
+  const xs=[];
+  if(fine){ const nf=Math.round(2*fine.half/fine.sp), no=Math.round((w/2-fine.half)/sp), so=(w/2-fine.half)/no;
+    for(let i=no;i>0;i--)xs.push(-fine.half-i*so); for(let i=0;i<=nf;i++)xs.push(-fine.half+i*2*fine.half/nf); for(let i=1;i<=no;i++)xs.push(fine.half+i*so); }
+  else { const n=Math.round(w/sp); for(let i=0;i<=n;i++)xs.push((i-n/2)*sp); }
+  const nx=xs.length, nz=Math.round(l/sp)+1;
   const pos=new Float32Array(nx*nz*3); let k=0;
-  for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){pos[k++]=(i-(nx-1)/2)*sp;pos[k++]=0;pos[k++]=(j-(nz-1)/2)*sp;}
+  for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){pos[k++]=xs[i];pos[k++]=0;pos[k++]=(j-(nz-1)/2)*sp;}
   const idx=new Uint32Array((nx-1)*(nz-1)*6); k=0;
   for(let j=0;j<nz-1;j++)for(let i=0;i<nx-1;i++){const a=j*nx+i,b=a+1,c=a+nx,d=c+1;idx[k++]=a;idx[k++]=c;idx[k++]=b;idx[k++]=b;idx[k++]=c;idx[k++]=d;}
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); return g;
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setIndex(new THREE.BufferAttribute(idx,1));
+  g.userData.half=[xs[nx-1],(nz-1)*sp/2]; return g;
 }
-let WATER_SP=0.7;
-const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP),waterMaterial(1)); waterNear.frustumCulled=false; waterNear.receiveShadow=true; scene.add(waterNear);
+let WATER_SP=0.7; const _wDir=V3();
+const WATER_FINE=12; // the fine band runs ±12 m either side of the boat's track: the wake out to about 70 m behind it
+const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP,{half:WATER_FINE,sp:0.2}),waterMaterial(1)); waterNear.frustumCulled=false; waterNear.receiveShadow=true; scene.add(waterNear);
 const waterFar=new THREE.Mesh(gridGeometry(9000,9000,1500),waterMaterial(0)); waterFar.frustumCulled=false; waterFar.position.y=-0.02; scene.add(waterFar);
 // quality: 2 high, 1 medium, 0 low. Auto mode steps down when frames run long, back up when there is headroom.
 const QUALITY=[
-  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.3,treeFar:-1e9,treeHide:900,reflTrees:0,spray:0.25,sprayN:4096,props:false},
-  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.55,treeFar:180,treeHide:1200,reflTrees:550,spray:0.6,sprayN:8192,props:true},
-  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,treeFar:350,treeHide:1550,reflTrees:1550,spray:1,sprayN:16384,props:true}];
+  {name:'low',sp:1.4,fine:0.45,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.3,treeFar:-1e9,treeHide:900,reflTrees:0,spray:0.25,sprayN:4096,props:false},
+  {name:'medium',sp:1.0,fine:0.3,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.55,treeFar:180,treeHide:1200,reflTrees:550,spray:0.6,sprayN:8192,props:true},
+  {name:'high',sp:0.7,fine:0.2,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,treeFar:350,treeHide:1550,reflTrees:1550,spray:1,sprayN:16384,props:true}];
 const waterGeos={}; let quality=2, qualityAuto=true, frameEMA=1/60, qualityTimer=0;
 function setQuality(q){
   q=clamp(q,0,QUALITY.length-1); quality=q; const Q=QUALITY[q];
-  if(!waterGeos[Q.sp])waterGeos[Q.sp]=gridGeometry(140,230,Q.sp);
-  waterNear.geometry=waterGeos[Q.sp]; WATER_SP=Q.sp;
+  const gk=Q.sp+'/'+Q.fine; if(!waterGeos[gk])waterGeos[gk]=gridGeometry(140,230,Q.sp,{half:WATER_FINE,sp:Q.fine});
+  waterNear.geometry=waterGeos[gk]; WATER_SP=Q.sp;
   reflOn=Q.refl>0; reflScale=Q.refl||0.25; post.bloomOn=Q.bloom;
   for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uDetail.value=Q.detail; m.uniforms.uReflOn.value=reflOn?1:0; }
   if(sun.shadow.mapSize.x!==Q.shadow){ sun.shadow.mapSize.set(Q.shadow,Q.shadow); if(sun.shadow.map){sun.shadow.map.dispose(); sun.shadow.map=null;} }
@@ -3406,9 +3427,12 @@ function tick(dt){
   if(!paused){ gatherInput(); physics(dt); }   // Settings pauses the ride: the world holds still, sound and music play on
   updateBoatVisual(dt); updateRiderVisual(paused?0.0001:dt); if(!paused)updateEffects(dt); updateCamera(dt,false); updateAudio(dt); djUpdate(dt); updateHUD(dt); updateFade(dt);
   // scrolling world
-  const sp=WATER_SP; waterNear.position.set(Math.round(camera.position.x/sp)*sp,0,Math.round((camera.position.z+62)/sp)*sp);
+  // the grid stays on the boat's track (its fine band is the wake) and reaches out the way the camera looks: ahead for
+  // the chase cameras, back down the wake from the tower. Snapped to its own spacing, so vertices never swim.
+  const sp=WATER_SP; camera.getWorldDirection(_wDir);
+  waterNear.position.set(0,0,Math.round((camera.position.z+62*clamp(_wDir.z*4,-1,1))/sp)*sp);
   waterFar.position.set(camera.position.x,-0.02,camera.position.z);
-  waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x,waterNear.position.z,Math.round(140/sp)*sp/2-1,Math.round(230/sp)*sp/2-1);
+  const hw=waterNear.geometry.userData.half; waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x,waterNear.position.z,hw[0]-1,hw[1]-1);
   sky.position.copy(camera.position); hills.position.set(camera.position.x,0,camera.position.z);
   shore.position.z=Math.round(camera.position.z/LAND_P)*LAND_P;
   skyUniforms.uTime.value=simTime;

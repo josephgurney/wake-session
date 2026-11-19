@@ -331,3 +331,20 @@ export function checkWakeGPU(ph = 0.37) {
   }
   return bad.length > 12 ? [...bad.slice(0, 12), `...and ${bad.length - 12} more`] : bad;
 }
+// The water grid across the wake: fine columns within ±12 m of the boat's track at the setting's `fine` spacing, the
+// grid centred on the track, and the GPU cost on high within 15% of a baseline: the v0.7.0 page's best of five gpu(40)
+// runs from the same camera, taken in the same session (GPU timings swing a lot run to run; the best is the steadiest).
+// On this Mac's pane that was 8.98 ms from the follow camera.
+/* global waterNear, QUALITY */
+export async function bestGpu(n = 5) { let b = 1e9; for (let i = 0; i < n; i++) { step(0.2); b = Math.min(b, (await gpu(40)).total); } return b; }
+export async function checkWater(baseMs = 8.98) {
+  const bad = [], Q = QUALITY[quality];
+  if (!Q.fine) return [`QUALITY[${quality}].fine missing`];
+  const pos = waterNear.geometry.attributes.position, z0 = pos.getZ(0), xs = [];
+  for (let i = 0; i < pos.count && pos.getZ(i) === z0; i++) xs.push(pos.getX(i));
+  let gap = 0; for (let i = 1; i < xs.length; i++) if (Math.abs(xs[i]) <= 12 && Math.abs(xs[i - 1]) <= 12) gap = Math.max(gap, xs[i] - xs[i - 1]);
+  if (Math.abs(gap - Q.fine) > 0.01) bad.push(`spacing across the wake ${fmt(gap)} m (want ${Q.fine})`);
+  if (waterNear.position.x !== 0) bad.push(`grid centred at x=${waterNear.position.x} (want 0, the boat's track)`);
+  if (quality === 2 && baseMs) { const g = await bestGpu(); if (g > baseMs * 1.15) bad.push(`gpu ${g} ms on high (want <= ${fmt(baseMs * 1.15)})`); }
+  return bad;
+}
