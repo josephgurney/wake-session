@@ -104,7 +104,7 @@ export function checkTrees() {
     for (const a of ['position', 'normal', 'uv', 'color', 'aSway', 'aLod']) if (!g.attributes[a]) bad.push(`${k} lod${lod} has no ${a}`);
   }
   const kinds = new Set(trees.map(m => m.userData.kind));
-  for (const k of ['spruce', 'pine', 'broadleaf', 'birch', 'willow']) if (!kinds.has(k)) bad.push(`no ${k} planted`);
+  for (const k of ['spruce', 'pine', 'broadleaf', 'birch', 'willow', 'bush']) if (!kinds.has(k)) bad.push(`no ${k} planted`);
   if (trees.some(m => !m.frustumCulled || !m.boundingSphere)) bad.push('chunks must be frustum-culled with bounding spheres');
   // every chunk repeats two chunks (one period) along, instance for instance, so the forward snap can't pop
   const key = m => `${m.userData.kind}|${m.userData.side}|${m.userData.chunk}`, by = new Map(trees.map(m => [key(m), m]));
@@ -162,9 +162,10 @@ export function checkQuality() {
     if (spray.rate !== Q.spray) bad.push(`spray rate ${spray.rate} on ${Q.name}`);
     if (props.visible !== Q.props) bad.push(`props ${props.visible} on ${Q.name}`);
     const cz = camera.position.z - shore.position.z;
-    for (const m of trees) { const a = Math.abs(cz - m.userData.zmid), dmin = a - 225, dmax = a + 225; if (dmin >= Q.treeHide) continue;
+    for (const m of trees) { const a = Math.abs(cz - m.userData.zmid), dmin = a - 225, dmax = a + 225; if (dmin >= Q.treeHide || (!Q.props && m.userData.kind === 'bush')) continue;
       if (m.visible !== dmin < Q.treeFar + 35 || m.userData.far.visible !== dmax > Q.treeFar - 35) { bad.push(`tree detail off on ${Q.name}`); break; } }
     if (quality === 0 && trees.some(m => m.visible)) bad.push('low should only draw the simple trees');
+    if (quality === 0 && trees.some(m => m.userData.kind === 'bush' && (m.visible || m.userData.far.visible))) bad.push('low should leave out the undergrowth');
   }
   if (!seen[3].includes('auto')) bad.push(`fourth press should return to auto, got "${seen[3]}"`);
   if (renderer.info.programs.length !== progs0) bad.push(`changing setting compiled ${renderer.info.programs.length - progs0} new shader(s)`);

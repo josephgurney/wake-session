@@ -1116,6 +1116,7 @@ function treeGeometry(kind,lod,seed){
   return b.geometry();
 }
 const TREE_GEO={}; for(const k of TREE_KINDS)TREE_GEO[k]=[treeGeometry(k,0,1),treeGeometry(k,1,1)];
+TREE_GEO.bush=TREE_GEO.broadleaf;   // bushes are small broadleaves sunk in the ground, in chunks of their own so low can leave them out
 const treeUniforms={uTime:{value:0},uLodFar:{value:350},uLodBand:{value:70},uLodOn:{value:1}};
 const treeMat=new THREE.MeshStandardMaterial({map:foliageAtlas,vertexColors:true,alphaTest:0.42,alphaToCoverage:true,side:THREE.DoubleSide,roughness:0.88,metalness:0});
 treeMat.onBeforeCompile=sh=>{
@@ -1166,7 +1167,7 @@ const trees=[];
     if(y<(bush?0.5:0.7)) continue;
     if(!bush && (nTrees>=2600 || rnd()>clamp((s-0.32)/0.22,0,1))) continue;
     if(bush && nBush>=900) continue;
-    const kind=bush?'broadleaf':pick(d-8,rnd()), grow=0.85+0.4*clamp(d/220,0,1);
+    const kind=bush?'bush':pick(d-8,rnd()), grow=0.85+0.4*clamp(d/220,0,1);
     const sc=bush?0.2+0.16*rnd():(0.8+0.5*rnd())*grow, tt=(bush?0.62:0.72)+0.3*rnd(), dark=kind==='spruce'?0.85:1;
     list.push({kind,side,ax,z0,y,sc,sink:bush?6.5*sc:0.3,sy:bush?0.75:0.92+0.16*rnd(),rot:rnd()*6.283,tint:[tt*dark*(0.94+0.12*rnd()),tt*dark,tt*dark*(0.88+0.18*rnd())],rank:rnd()});
     if(bush)nBush++; else nTrees++;
@@ -1283,7 +1284,8 @@ function updateTreeLod(){
   const Q=QUALITY[quality], far=Q.treeFar, hide=Q.treeHide, cz=camera.position.z-shore.position.z;
   treeUniforms.uLodFar.value=far; treeUniforms.uLodBand.value=TREE_BAND;
   for(const m of trees){ const a=Math.abs(cz-m.userData.zmid), d=a-TREE_CHUNK/2; m.userData.d=d;
-    m.visible=d<hide && d<far+TREE_BAND/2; m.userData.far.visible=d<hide && a+TREE_CHUNK/2>far-TREE_BAND/2; }
+    const on=d<hide && (Q.props || m.userData.kind!=='bush');   // the undergrowth goes with the props on low
+    m.visible=on && d<far+TREE_BAND/2; m.userData.far.visible=on && a+TREE_CHUNK/2>far-TREE_BAND/2; }
   for(const g of landParts) g.visible=Math.abs(cz-g.userData.zmid)-LAND_P/2<hide;   // and the ground with them
 }
 // Far hills: three wooded ridges round the camera, each lying back up its slope so the sun shades it, with a tree-lined
