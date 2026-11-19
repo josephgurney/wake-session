@@ -4,7 +4,7 @@
 
 ## Why
 
-Joseph wants the wake to look and ride like a real wake boat's: the ramp each side and the shape in the middle. He chose to match real numbers (width and height too), not just reshape it at today's size.
+Joseph wants the wake to look and ride like a real wake boat's: the ramp each side and the shape in the middle. The choice was to match real numbers (width and height too), not just reshape it at today's size.
 
 ## What real wakes look like (research)
 
