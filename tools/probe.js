@@ -433,7 +433,7 @@ export async function benchAll() {
 
 // Checks for the whitewater pass (docs/superpowers/plans/2026-11-19-whitewater.md).
 // foamCover: for each region of the wake (boat frame: u across, d behind the transom; with crest:true, u is s = |u| - crest,
-// measured on both sides), look straight down from 14 m over it with the board's foam, the spray, the rider and the rope
+// measured on both sides), look straight down from 14 m (or the region's h) over it with the board's foam, the spray, the rider and the rope
 // hidden, and return the share (%) of points, 6 per metre each way, whose pixel is foam (brightest channel over 170).
 /* global foam, rider, ropeSegs, waterNear, waterFar, WATER_SP, waterAt, simTime */
 export const FOAM_REGIONS = [
@@ -450,6 +450,8 @@ export const FOAM_REGIONS = [
   { name: 'lace20', crest: true, u: [-2.2, -1], d: [18, 23], want: [10, 50] },
   { name: 'lace60', crest: true, u: [-3, -1], d: [58, 62], want: [0, 10] },
   { name: 'flats', crest: true, u: [4, 6], d: [18, 23], want: [0, 2] },
+  // from 75 m up, where a pixel covers about 15 cm of lake: the breaking crest must still read as white, not grey
+  { name: 'crest5high', crest: true, u: [-0.4, 0.2], d: [4, 7], h: 75, want: [40, 100] },
 ];
 export function foamCover(regions = FOAM_REGIONS) {
   const gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, sz = boatZ - STERN_OFF;
@@ -460,7 +462,7 @@ export function foamCover(regions = FOAM_REGIONS) {
     for (const side of r.crest ? [-1, 1] : [1]) {
       const at = (a, d) => r.crest ? side * (crestX(d) + a) : a;
       const uc = at((r.u[0] + r.u[1]) / 2, (r.d[0] + r.d[1]) / 2), zc = sz - (r.d[0] + r.d[1]) / 2;
-      camera.position.set(uc, 14, zc); camera.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+      camera.position.set(uc, r.h || 14, zc); camera.quaternion.setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
       camera.fov = 54; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
       waterNear.position.set(0, 0, Math.round(zc / WATER_SP) * WATER_SP); waterFar.position.set(uc, -0.02, zc);
       const hw = waterNear.geometry.userData.half; waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x, waterNear.position.z, hw[0] - 1, hw[1] - 1);
