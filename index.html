@@ -474,6 +474,7 @@ try {
 </script>
 <script type="text/plain" id="game">
 'use strict';
+performance.mark('tyc:game'); // tools/probe.js times the world build from here to 'tyc:built'
 /* =====================================================================
    THURSDAY YACHT CLUB — a wakeboarding sim in a single file.
    Physics: rider is a point mass on an inelastic tow rope behind a boat
@@ -2877,6 +2878,7 @@ function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h,false)
   renderer.getDrawingBufferSize(_dbs); const bw=Math.max(2,Math.floor(_dbs.x)),bh=Math.max(2,Math.floor(_dbs.y));
   post.sceneRT.setSize(bw,bh); post.bright.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurA.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2)); post.blurB.setSize(Math.max(2,bw>>2),Math.max(2,bh>>2));
   post.finalMat.uniforms.uRes.value.set(bw,bh); reflRT.setSize(Math.max(2,Math.floor(bw*reflScale)),Math.max(2,Math.floor(bh*reflScale))); }
+performance.mark('tyc:built');
 addEventListener('resize',resize); resize(); setQuality(isTouchDevice?1:2);
 // The loading screen holds the card back until the rider and the crew are in and a few frames have drawn them, so their
 // shaders have compiled before anyone takes the handle. If a model never reports back, it lets go after 15 s anyway.
