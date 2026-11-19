@@ -842,9 +842,9 @@ const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP),waterMaterial(1));
 const waterFar=new THREE.Mesh(gridGeometry(9000,9000,1500),waterMaterial(0)); waterFar.frustumCulled=false; waterFar.position.y=-0.02; scene.add(waterFar);
 // quality: 2 high, 1 medium, 0 low. Auto mode steps down when frames run long, back up when there is headroom.
 const QUALITY=[
-  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.5,spray:0.3},
-  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.75,spray:0.6},
-  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,spray:1}];
+  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.5,spray:0.3,props:false},
+  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.75,spray:0.6,props:true},
+  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,spray:1,props:true}];
 const waterGeos={}; let quality=2, qualityAuto=true, frameEMA=1/60, qualityTimer=0;
 function setQuality(q){
   q=clamp(q,0,QUALITY.length-1); quality=q; const Q=QUALITY[q];
@@ -854,7 +854,7 @@ function setQuality(q){
   for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uDetail.value=Q.detail; m.uniforms.uReflOn.value=reflOn?1:0; }
   if(sun.shadow.mapSize.x!==Q.shadow){ sun.shadow.mapSize.set(Q.shadow,Q.shadow); if(sun.shadow.map){sun.shadow.map.dispose(); sun.shadow.map=null;} }
   setTreeDensity(Q.trees);
-  spray.rate=Q.spray;
+  spray.rate=Q.spray; props.visible=Q.props;
   renderer.setPixelRatio(Math.min(devicePixelRatio,Q.pr)); resize();
   const q1=document.getElementById('quality'); if(q1)q1.textContent=`quality: ${Q.name}${qualityAuto?' (auto)':''}`;
 }
@@ -870,34 +870,70 @@ function autoQuality(dt){
 // periods long, so the whole group can snap forward by one period as the boat travels and nothing visibly changes. Five
 // periods put the far end of the bank at least 1.8 km ahead, behind the nearer ridge, so it never shows.
 const SHORE_X=76, LAND_P=900, SHORE_SPAN=5;
+// What the waterline is like along each bank: beach, rock or reeds, as weights that add up to one. Periodic in z; the
+// two banks are offset so they don't mirror each other.
+function shoreType(side,z){
+  const k=2*Math.PI/LAND_P, zz=z+(side<0?331:0);
+  const a=Math.sin(zz*k*3+0.7)+0.55*Math.sin(zz*k*7+2.1), b=Math.sin(zz*k*4+2.9)+0.55*Math.sin(zz*k*9+0.3);
+  const rock=smoothstep(0.55,1.05,a), reed=smoothstep(0.55,1.05,b)*(1-rock);
+  return {beach:1-rock-reed,rock,reed};
+}
+// Height of the bank. Beaches shelve gently, rocky stretches rise steeply from the water, reed beds stay low and flat
+// so the water creeps in among them.
 function landH(x,z){
-  const ax=Math.abs(x); const k=2*Math.PI/LAND_P;
-  const n=0.5*Math.sin(z*k*3+ax*0.011)+0.3*Math.sin(z*k*11+ax*0.031+1.7)+0.2*Math.sin(z*k*29-ax*0.07+0.4);
-  const shore=clamp((ax-SHORE_X)/18,0,1); const p=clamp((ax-SHORE_X)/120,0,1); const t=clamp((ax-SHORE_X)/520,0,1);
-  return -1.5+2.0*shore*(1+0.3*n)+4.0*Math.pow(p,1.5)*(1+n)+70*t*t*(0.8+0.3*n);
+  const ax=Math.abs(x), side=x<0?-1:1, k=2*Math.PI/LAND_P, zz=z+(side<0?331:0);
+  const n=0.5*Math.sin(zz*k*3+ax*0.011)+0.3*Math.sin(zz*k*11+ax*0.031+1.7)+0.2*Math.sin(zz*k*29-ax*0.07+0.4);
+  const st=shoreType(side,z), w=st.beach*20+st.rock*7+st.reed*30, lift=st.rock*1.4-st.reed*0.5;
+  const shore=clamp((ax-SHORE_X)/w,0,1), p=clamp((ax-SHORE_X)/120,0,1), t=clamp((ax-SHORE_X)/520,0,1);
+  return -1.5+(2.0+lift)*Math.pow(shore,1-0.4*st.rock)*(1+0.3*n)+4.0*Math.pow(p,1.5)*(1+n)+70*t*t*(0.8+0.3*n);
 }
-const _lc=new THREE.Color();
-function landColor(y,ax,z,out){
-  const r=mulberry32((Math.round(ax*0.37)*7919+Math.round(z*0.37)*104729)|0)();
-  if(y<0.5){ out.setRGB(0.40+0.06*r,0.36+0.05*r,0.26+0.04*r); }
-  else if(y<2.6){ const t=(y-0.5)/2.1; out.setRGB(0.40,0.36,0.26).lerp(_lc.setRGB(0.16+0.07*r,0.25+0.08*r,0.08+0.04*r),t); }
-  else { const t=clamp((y-2.6)/40,0,1); out.setRGB(0.07+0.05*r,0.12+0.06*r,0.05+0.03*r).lerp(_lc.setRGB(0.10,0.16,0.09),t); }
-  return out;
-}
+// where the bank meets the water (y = 0) on one side at z, as a distance out from the course
+function waterlineX(side,z){ let ax=SHORE_X-6; while(ax<SHORE_X+120 && landH(side*ax,z)<0) ax+=0.25; return ax; }
 function landGeometry(side){
-  const x0=SHORE_X-10, x1=SHORE_X+640, sp=8;
-  const nx=Math.round((x1-x0)/sp)+1, nz=Math.round(LAND_P*SHORE_SPAN/sp)+1;
-  const pos=new Float32Array(nx*nz*3), col=new Float32Array(nx*nz*3); let k=0;
-  for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){
-    const ax=x0+i*sp, z=-LAND_P*SHORE_SPAN/2+j*sp; const y=landH(ax,z);
-    pos[k]=side*ax; pos[k+1]=y; pos[k+2]=z; landColor(y,ax,z,_lc); col[k]=_lc.r; col[k+1]=_lc.g; col[k+2]=_lc.b; k+=3;
-  }
+  // finer across the waterline, where the bank's shape changes fastest
+  const xs=[]; for(let x=SHORE_X-10;x<SHORE_X+44;x+=2)xs.push(x); for(let x=SHORE_X+44;x<=SHORE_X+640;x+=8)xs.push(x);
+  const sp=8, nx=xs.length, nz=Math.round(LAND_P*SHORE_SPAN/sp)+1;
+  const pos=new Float32Array(nx*nz*3), sh=new Float32Array(nx*nz*3); let k=0;
+  for(let j=0;j<nz;j++){ const z=-LAND_P*SHORE_SPAN/2+j*sp, st=shoreType(side,z);
+    for(let i=0;i<nx;i++){ const ax=xs[i]; pos[k]=side*ax; pos[k+1]=landH(side*ax,z); pos[k+2]=z; sh[k]=st.beach; sh[k+1]=st.rock; sh[k+2]=st.reed; k+=3; } }
   const idx=new Uint32Array((nx-1)*(nz-1)*6); k=0;
   for(let j=0;j<nz-1;j++)for(let i=0;i<nx-1;i++){const a=j*nx+i,b=a+1,c=a+nx,d=c+1; if(side>0){idx[k++]=a;idx[k++]=c;idx[k++]=b;idx[k++]=b;idx[k++]=c;idx[k++]=d;} else {idx[k++]=a;idx[k++]=b;idx[k++]=c;idx[k++]=b;idx[k++]=d;idx[k++]=c;}}
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('color',new THREE.BufferAttribute(col,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); g.computeVertexNormals(); return g;
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setAttribute('aShore',new THREE.BufferAttribute(sh,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); g.computeVertexNormals(); return g;
 }
+// Ground: grass in two tones with patches of bare earth, rock on the steep parts and along rocky shores, sand on the
+// beaches and mud in the reeds, and a dark, glossy wet band where the water laps. The noise repeats every LAND_P along
+// the bank (z wraps round a circle), so it doesn't change when the bank snaps forward.
+const BANK_NOISE_GLSL=`
+float hash3(vec3 p){ p=fract(p*0.1031); p+=dot(p,p.zyx+31.32); return fract((p.x+p.y)*p.z); }
+float vnoise3(vec3 p){ vec3 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  return mix(mix(mix(hash3(i),hash3(i+vec3(1,0,0)),f.x),mix(hash3(i+vec3(0,1,0)),hash3(i+vec3(1,1,0)),f.x),f.y),
+             mix(mix(hash3(i+vec3(0,0,1)),hash3(i+vec3(1,0,1)),f.x),mix(hash3(i+vec3(0,1,1)),hash3(i+vec3(1,1,1)),f.x),f.y),f.z); }
+float bankNoise(vec2 xz, float s){ float a=xz.y*6.2831853/${LAND_P}.0, R=${LAND_P}.0/6.2831853; return vnoise3(vec3(xz.x,cos(a)*R,sin(a)*R)*s); }`;
 const shore=new THREE.Group(); scene.add(shore);
-const landMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:1,metalness:0});
+const landMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:0.95,metalness:0});
+landMat.onBeforeCompile=sh=>{
+  sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute vec3 aShore; varying vec3 vShore; varying vec3 vLPos; varying float vNy;')
+    .replace('#include <begin_vertex>','#include <begin_vertex>\nvShore=aShore; vLPos=position; vNy=normal.y;');
+  sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\nvarying vec3 vShore; varying vec3 vLPos; varying float vNy; float wetK;\n'+BANK_NOISE_GLSL)
+    .replace('#include <color_fragment>',`#include <color_fragment>
+      { vec2 p=vLPos.xz; float y=vLPos.y;
+        float n1=bankNoise(p,0.05), n2=bankNoise(p,0.21), fine=bankNoise(p,0.9);
+        vec3 grass=mix(vec3(0.036,0.062,0.018),vec3(0.062,0.078,0.024),smoothstep(0.35,0.75,n1));
+        grass=mix(grass,vec3(0.07,0.05,0.032),smoothstep(0.66,0.8,bankNoise(p,0.024))*0.85);           // bare earth
+        vec3 sand=vec3(0.21,0.18,0.12)*(0.85+0.3*n2), mud=vec3(0.05,0.045,0.03), rock=vec3(0.085,0.08,0.07)*(0.55+0.9*n2*fine);
+        rock=mix(rock,vec3(0.035,0.048,0.022),smoothstep(0.5,0.8,bankNoise(p,0.13))*0.65);                // moss and lichen
+        float low=1.0-smoothstep(0.4,1.6,y);                                                             // the strip by the water
+        vec3 edge=sand*vShore.x+rock*vShore.y+mix(mud,grass*0.8,0.35)*vShore.z;
+        vec3 c=mix(grass,edge,low*(0.55+0.45*smoothstep(0.3,0.6,n2)));
+        c=mix(c,rock,smoothstep(0.86,0.74,vNy)*0.85);                                                    // steep ground is rock
+        c=mix(c,rock,vShore.y*(1.0-smoothstep(1.5,3.5,y)));                                             // and so is a rocky shore
+        wetK=smoothstep(0.16,0.02,y);                                                                    // the wet band where it laps
+        c*=mix(1.0,0.5,wetK); c*=0.82+0.36*fine;
+        diffuseColor.rgb=c; }`)
+    .replace('#include <roughnessmap_fragment>','#include <roughnessmap_fragment>\nroughnessFactor=mix(roughnessFactor,0.4,wetK);')
+    // dry grass and earth hardly mirror anything, even at a low angle; only the wet band does
+    .replace('#include <lights_fragment_end>','#include <lights_fragment_end>\nreflectedLight.indirectSpecular*=mix(0.2,1.0,wetK); reflectedLight.directSpecular*=mix(0.35,1.0,wetK);');
+};
 for(const side of [-1,1]){ const m=new THREE.Mesh(landGeometry(side),landMat); shore.add(m); }
 // Trees: spruce, pine, a broadleaf (oak-like, and small for the bushes along the forest edge), birch and willow. Each is
 // a trunk and limbs in bark with its foliage on alpha-tested cards, from one atlas painted here at boot. Card normals
@@ -1052,7 +1088,7 @@ function treeGeometry(kind,lod,seed){
     b.limb(V3(0,-0.4,0),fork,birch?0.17:0.38,birch?0.12:0.28,far?4:6,birch);
     const limbs=birch?2:4;
     for(let i=0;i<limbs;i++){ const a=i/limbs*6.283+rnd(), end=V3(Math.cos(a)*R*0.45+lean.x,cy+(rnd()-0.2)*Ry*0.6,Math.sin(a)*R*0.45+lean.z);
-      b.limb(fork,end,birch?0.1:0.22,birch?0.05:0.1,far?3:5,birch); }
+      if(!far) b.limb(fork,end,birch?0.1:0.22,birch?0.05:0.1,5,birch); }
     const n=far?(birch?5:7):(birch?10:15), size=birch?2.6:4.2;
     for(let i=0;i<n;i++){ const u=rnd()*6.283, v=Math.acos(1-1.75*rnd()), rr=i<2&&!far?0.35:0.62+0.38*rnd();   // clumps over the upper crown, a couple inside
       const c=V3(Math.sin(v)*Math.cos(u)*R*rr+lean.x,cy+Math.cos(v)*Ry*rr,Math.sin(v)*Math.sin(u)*R*rr+lean.z);
@@ -1110,7 +1146,7 @@ const trees=[];
     if(d<70){ return r<0.36?'broadleaf':r<0.55?'birch':r<0.85?'spruce':'pine'; } return r<0.55?'spruce':r<0.82?'pine':'broadleaf'; };
   let nTrees=0, nBush=0;
   for(let n=0;n<80000 && (nTrees<2600||nBush<900);n++){
-    const side=n%2===0?1:-1, d=8+Math.pow(rnd(),1.8)*300, ax=SHORE_X+d, z0=-LAND_P/2+rnd()*LAND_P, y=landH(ax,z0), s=stand(ax,z0), r=rnd();
+    const side=n%2===0?1:-1, d=8+Math.pow(rnd(),1.8)*300, ax=SHORE_X+d, z0=-LAND_P/2+rnd()*LAND_P, y=landH(side*ax,z0), s=stand(ax,z0), r=rnd();
     const bush=nBush<900 && d<90 && s>0.22 && r<0.32;
     if(y<(bush?0.5:0.7)) continue;
     if(!bush && (nTrees>=2600 || rnd()>clamp((s-0.32)/0.22,0,1))) continue;
@@ -1137,6 +1173,87 @@ const trees=[];
 function setTreeDensity(f){ for(const m of trees)m.count=Math.round(m.userData.full*f); }
 // the water's reflection is blurred anyway: draw it with the cheap trees, then put the near ones back
 function treesFar(on){ for(const m of trees) m.geometry=TREE_GEO[m.userData.kind][on?1:m.userData.lod]; }
+// ---------- props on the banks: rocks, reeds, jetties with boats tied up, a boathouse ----------
+// One period's worth, copied along the whole bank like the trees. Everything but the reeds is one merged mesh; rocks
+// and reeds are instanced. The low quality setting leaves them out.
+function mergeParts(parts){ // [{g, c:[r,g,b]}] -> one geometry with position, normal and colour
+  const geos=parts.map(p=>{ const g=p.g.index?p.g.toNonIndexed():p.g; if(!g.attributes.normal)g.computeVertexNormals(); return g; });
+  let n=0; for(const g of geos)n+=g.attributes.position.count;
+  const pos=new Float32Array(n*3), nor=new Float32Array(n*3), col=new Float32Array(n*3); let o=0;
+  geos.forEach((g,i)=>{ const c=g.attributes.position.count, [r,gg,b]=parts[i].c; pos.set(g.attributes.position.array,o*3); nor.set(g.attributes.normal.array,o*3);
+    for(let k=0;k<c;k++){ col[(o+k)*3]=r; col[(o+k)*3+1]=gg; col[(o+k)*3+2]=b; } o+=c; });
+  const m=new THREE.BufferGeometry(); m.setAttribute('position',new THREE.BufferAttribute(pos,3)); m.setAttribute('normal',new THREE.BufferAttribute(nor,3)); m.setAttribute('color',new THREE.BufferAttribute(col,3)); m.computeBoundingSphere(); return m;
+}
+function concatGeos(list){ // same attributes in each, non-indexed
+  const out=new THREE.BufferGeometry();
+  for(const name of ['position','normal','color']){ const n=list.reduce((s,g)=>s+g.attributes[name].array.length,0), a=new Float32Array(n); let o=0;
+    for(const g of list){ a.set(g.attributes[name].array,o); o+=g.attributes[name].array.length; } out.setAttribute(name,new THREE.BufferAttribute(a,3)); }
+  out.computeBoundingSphere(); return out;
+}
+const propMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.85,metalness:0});
+function buildProps(){
+  const group=new THREE.Group(), rnd=mulberry32(606), half=(SHORE_SPAN-1)/2, parts=[];
+  const box=(w,h,d,M,c)=>parts.push({g:new THREE.BoxGeometry(w,h,d).applyMatrix4(M),c});
+  const cyl=(r,h,M,c)=>parts.push({g:new THREE.CylinderGeometry(r,r,h,6).applyMatrix4(M),c});
+  const at=(x,y,z,ry=0,rz=0)=>new THREE.Matrix4().compose(V3(x,y,z),new THREE.Quaternion().setFromEuler(new THREE.Euler(0,ry,rz)),V3(1,1,1));
+  const timber=()=>{ const t=0.8+0.4*rnd(); return [0.15*t,0.11*t,0.075*t]; };
+  // a frame for a prop at the waterline: u runs out over the water, w along the bank
+  const frame=(side,z)=>{ const x=side*waterlineX(side,z); return (u,y,w)=>V3(x-side*u,y,z+w); };
+  // where along the bank to put a prop: the nearest z to the one asked for that isn't a rocky stretch
+  const spot=(side,z)=>{ for(let d=0;d<200;d+=5) for(const s of [1,-1]){ const zz=z+s*d; if(shoreType(side,zz).rock<0.25) return zz; } return z; };
+  // a small motorboat: lofted from a plan outline, white with a navy deck and a black outboard
+  const boat=(P,yaw)=>{
+    const sh=new THREE.Shape(); sh.moveTo(-2.1,-0.8); sh.lineTo(1.7,-0.8); sh.quadraticCurveTo(2.7,-0.5,2.9,0); sh.quadraticCurveTo(2.7,0.5,1.7,0.8); sh.lineTo(-2.1,0.8); sh.closePath();
+    const hull=new THREE.ExtrudeGeometry(sh,{depth:0.7,bevelEnabled:true,bevelSize:0.08,bevelThickness:0.08,bevelSegments:1,curveSegments:6}); hull.rotateX(-Math.PI/2);
+    const deck=new THREE.ExtrudeGeometry(sh,{depth:0.06,bevelEnabled:false,curveSegments:6}); deck.rotateX(-Math.PI/2); deck.scale(0.86,1,0.82); deck.translate(0,0.72,0);
+    const M=new THREE.Matrix4().compose(P,new THREE.Quaternion().setFromAxisAngle(UP,yaw),V3(1,1,1));
+    const navy=rnd()<0.5; parts.push({g:hull.applyMatrix4(M),c:navy?[0.02,0.025,0.06]:[0.7,0.7,0.67]},{g:deck.applyMatrix4(M),c:navy?[0.62,0.6,0.55]:[0.03,0.04,0.09]});
+    box(0.35,0.7,0.3,new THREE.Matrix4().multiplyMatrices(M,at(-2.25,0.75,0)),[0.02,0.02,0.02]);
+    box(0.05,0.35,1.1,new THREE.Matrix4().multiplyMatrices(M,at(0.6,0.95,0,0,-0.4)),[0.05,0.06,0.07]);
+  };
+  // a timber jetty on posts, running out from the bank, a boat tied alongside the end of some
+  const jetty=(side,z,len,withBoat)=>{ const F=frame(side,z), yaw=side>0?Math.PI:0, deckY=0.55;
+    for(let u=-3;u<len;u+=0.27){ const c=timber(), p=F(u,deckY,0); box(0.22,0.05,2.0,at(p.x,p.y,p.z,0,0),c); }
+    for(const w of [-0.85,0.85]){ const p=F((len-3)/2,deckY-0.12,w); box(Math.abs(len+3),0.12,0.12,at(p.x,p.y,p.z),[0.09,0.07,0.05]); }
+    for(let u=-2;u<=len;u+=2.4) for(const w of [-0.95,0.95]){ const p=F(u,deckY-1.4,w); cyl(0.11,2.9,at(p.x,p.y,p.z),[0.07,0.055,0.04]); }
+    if(withBoat){ const p=F(len-2.6,-0.3,2.1); boat(p,yaw+(rnd()-0.5)*0.08); }   // bow out over the water
+  };
+  // a boathouse: dark timber, open to the water, its front half on posts
+  const boathouse=(side,z)=>{ const F=frame(side,z), W=6, D=9, H=3.2, wall=[0.09,0.065,0.045], roof=[0.045,0.05,0.045];
+    const f=F(1.5,0.35,0); box(D,0.25,W,at(f.x,f.y,f.z),timber());
+    const back=F(-3,0.35+H/2,0); box(0.2,H,W,at(back.x,back.y,back.z),wall);
+    for(const w of [-W/2,W/2]){ const p=F(1.5,0.35+H/2,w); box(D,H,0.2,at(p.x,p.y,p.z),wall); }
+    for(const w of [-1,1]){ const p=F(1.5,0.35+H+0.85,w*W/4); box(D+0.8,0.12,W/2+0.6,at(p.x,p.y,p.z,0,0).multiply(new THREE.Matrix4().makeRotationX(w*0.52)),roof); }
+    for(let u=2;u<=6;u+=2) for(const w of [-W/2,W/2]){ const p=F(u,-1.2,w); cyl(0.13,3.0,at(p.x,p.y,p.z),[0.06,0.05,0.035]); }
+  };
+  [[1,-300,true],[-1,70,true],[1,320,false]].forEach(([side,z,b])=>jetty(side,spot(side,z),13+5*rnd(),b));
+  boathouse(-1,spot(-1,-150));
+  const one=mergeParts(parts), copies=[];
+  for(let m=-half;m<=half;m++) copies.push(one.clone().translate(0,0,m*LAND_P));
+  const built=new THREE.Mesh(concatGeos(copies),propMat); built.frustumCulled=false; group.add(built);
+  const jetties=3*SHORE_SPAN, houses=SHORE_SPAN;
+  // rocks along the rocky stretches, half in the water
+  const rockGeo=new THREE.IcosahedronGeometry(1,1); { const p=rockGeo.attributes.position;
+    for(let i=0;i<p.count;i++){ const x=p.getX(i), y=p.getY(i), z=p.getZ(i), r=1+0.22*Math.sin(3*x+1)*Math.sin(2.3*y+2)*Math.sin(3.7*z)+0.1*Math.sin(7*x+5*z); p.setXYZ(i,x*r,y*r*0.62,z*r); }
+    rockGeo.computeVertexNormals(); }
+  const rockList=[]; for(let i=0;i<4000 && rockList.length<90;i++){ const side=i%2?1:-1, z=-LAND_P/2+rnd()*LAND_P, st=shoreType(side,z); if(st.rock<0.5)continue;
+    const ax=waterlineX(side,z)+(rnd()-0.4)*6, s=0.5+Math.pow(rnd(),2)*2.2; rockList.push({x:side*ax,z,s,y:landH(side*ax,z)-0.35*s,ry:rnd()*6.3,t:0.75+0.5*rnd()}); }
+  const rocks=new THREE.InstancedMesh(rockGeo,new THREE.MeshStandardMaterial({color:new THREE.Color(0.075,0.07,0.062),roughness:1,flatShading:true,envMapIntensity:0.45}),rockList.length*SHORE_SPAN);
+  { const M=new THREE.Matrix4(), q=new THREE.Quaternion(), c=new THREE.Color(); let i=0;
+    for(let m=-half;m<=half;m++) for(const r of rockList){ M.compose(V3(r.x,r.y,r.z+m*LAND_P),q.setFromAxisAngle(UP,r.ry),V3(r.s,r.s,r.s)); rocks.setMatrixAt(i,M); rocks.setColorAt(i,c.setRGB(r.t,r.t*0.97,r.t*0.92)); i++; } }
+  rocks.frustumCulled=false; group.add(rocks);
+  // reed beds in the shallows along the reedy stretches, in the trees' material so they sway with them
+  const rb=treeBuilder({c:V3(0,0.5,0),r:1.1,y0:0,y1:1.9});
+  for(let i=0;i<3;i++){ const a=i*Math.PI/3; rb.card(V3(0,0.9,0),V3(Math.cos(a),0,Math.sin(a)),V3(0,1,0),2.2,1.8,ATLAS_CELL.reed); }
+  const reedList=[]; for(let i=0;i<8000 && reedList.length<260;i++){ const side=i%2?1:-1, z=-LAND_P/2+rnd()*LAND_P, st=shoreType(side,z); if(rnd()>st.reed)continue;
+    const ax=waterlineX(side,z)+(rnd()-0.7)*10; reedList.push({x:side*ax,z,y:Math.min(0,landH(side*ax,z))-0.15,s:0.8+0.6*rnd(),sy:0.8+0.3*rnd(),ry:rnd()*6.3,t:0.8+0.35*rnd()}); }
+  const reeds=new THREE.InstancedMesh(rb.geometry(),treeMat,reedList.length*SHORE_SPAN);
+  { const M=new THREE.Matrix4(), q=new THREE.Quaternion(), c=new THREE.Color(); let i=0;
+    for(let m=-half;m<=half;m++) for(const r of reedList){ M.compose(V3(r.x,r.y,r.z+m*LAND_P),q.setFromAxisAngle(UP,r.ry),V3(r.s,r.s*r.sy,r.s)); reeds.setMatrixAt(i,M); reeds.setColorAt(i,c.setRGB(r.t,r.t,r.t*0.95)); i++; } }
+  reeds.frustumCulled=false; group.add(reeds);
+  group.userData={jetties,boathouses:houses}; return group;
+}
+const props=buildProps(); shore.add(props);
 // a chunk far enough down the course (along z) swaps to the cheaper trees, and one beyond the ridge isn't drawn
 function updateTreeLod(){
   const far=quality===0?TREE_FAR.low:TREE_FAR.near, cz=camera.position.z-shore.position.z;
@@ -1144,19 +1261,38 @@ function updateTreeLod(){
     m.visible=d<TREE_HIDE;   // past the nearer ridge, which stands round the camera at 1.5 km, a chunk can't be seen
     if(lod!==m.userData.lod){ m.userData.lod=lod; m.geometry=TREE_GEO[m.userData.kind][lod]; } }
 }
-function makeRidge(radius,n,baseH,varH,color,seed){
+// Far hills: three wooded ridges round the camera, each lying back up its slope so the sun shades it, with a tree-lined
+// crest and a speckle of forest on its face, fading into the haze the further off it is (and more at its foot, where the
+// air is thicker). They ride with the camera, so their texture is in their own coordinates.
+function makeRidge(radius,n,baseH,varH,haze,seed){
   const rnd=mulberry32(seed); const ph=[rnd()*6,rnd()*6,rnd()*6,rnd()*6]; const hs=[];
   for(let i=0;i<n;i++){const a=i/n*Math.PI*2; const big=0.5+0.5*Math.sin(a*3+ph[0])*Math.sin(a*5+ph[1]); const mid=0.5+0.5*Math.sin(a*11+ph[2])*Math.cos(a*17+ph[3]); hs.push(baseH+varH*(0.55*big+0.3*mid+0.15*rnd()));}
   let sm=hs; for(let k=0;k<2;k++){const src=sm; sm=src.map((h,i)=>(src[(i-1+n)%n]+2*h+src[(i+1)%n])/4);}
-  const pos=[],idx=[];
-  for(let i=0;i<n;i++){const a=i/n*Math.PI*2;const r=radius*(1+0.03*Math.sin(a*7+ph[0]));const x=Math.cos(a)*r,z=Math.sin(a)*r;pos.push(x,-40,z,x,sm[i],z);}
-  for(let i=0;i<n;i++){const j=(i+1)%n;const b=i*2,c=j*2;idx.push(b,c,b+1,c,c+1,b+1);}
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setIndex(idx); g.computeVertexNormals();
-  return new THREE.Mesh(g,new THREE.MeshStandardMaterial({color,flatShading:true,roughness:1,side:THREE.DoubleSide}));
+  const crest=sm.map((h,i)=>h+radius*0.0028*(0.5+0.5*Math.sin(i*1.9+ph[2])*Math.sin(i*0.77+ph[1]))*(0.6+0.8*rnd()));   // trees on the skyline
+  const ROWS=[0,0.12,0.3,0.55,0.8,1], pos=[], row=[], idx=[];
+  for(let i=0;i<n;i++){ const a=i/n*Math.PI*2, r0=radius*(1+0.03*Math.sin(a*7+ph[0]));
+    for(const f of ROWS){ const r=r0*(1+0.2*f), y=-6+(crest[i]+6)*Math.pow(f,0.8); pos.push(Math.cos(a)*r,y,Math.sin(a)*r); row.push(f); } }
+  const R=ROWS.length;
+  for(let i=0;i<n;i++){ const j=(i+1)%n; for(let k=0;k<R-1;k++){ const a=i*R+k, b=j*R+k; idx.push(a,b,a+1,b,b+1,a+1); } }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); g.setAttribute('aRow',new THREE.Float32BufferAttribute(row,1)); g.setIndex(idx); g.computeVertexNormals();
+  const m=new THREE.MeshStandardMaterial({color:new THREE.Color(0.032,0.055,0.03),roughness:1,side:THREE.DoubleSide,fog:false});
+  m.onBeforeCompile=sh=>{
+    sh.uniforms.uHaze={value:FOG_COLOR}; sh.uniforms.uHazeK={value:haze};
+    sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nattribute float aRow; varying float vRow; varying vec3 vLoc;')
+      .replace('#include <begin_vertex>','#include <begin_vertex>\nvRow=aRow; vLoc=position;');
+    sh.fragmentShader=sh.fragmentShader.replace('#include <common>',`#include <common>\nuniform vec3 uHaze; uniform float uHazeK; varying float vRow; varying vec3 vLoc;\n${NOISE_GLSL}`)
+      .replace('#include <color_fragment>',`#include <color_fragment>
+        { float a=atan(vLoc.z,vLoc.x)*${radius.toFixed(1)}; vec2 p=vec2(a,vLoc.y);
+          float t=vnoise(p*0.09)*0.6+vnoise(p*0.31)*0.4; diffuseColor.rgb*=0.55+0.8*t;
+          diffuseColor.rgb=mix(diffuseColor.rgb,vec3(0.06,0.065,0.035),smoothstep(0.62,0.8,vnoise(p*0.012))*0.6); }`)
+      .replace('#include <opaque_fragment>','outgoingLight=mix(outgoingLight,uHaze,clamp(uHazeK*(1.0+0.35*(1.0-vRow)),0.0,0.97));\n#include <opaque_fragment>');
+  };
+  return new THREE.Mesh(g,m);
 }
 const hills=new THREE.Group();
-hills.add(makeRidge(2100,260,60,240,new THREE.Color(0.09,0.15,0.11),7));
-hills.add(makeRidge(1500,220,30,120,new THREE.Color(0.08,0.14,0.09),3));
+hills.add(makeRidge(3000,420,140,300,0.8,11));
+hills.add(makeRidge(2100,560,60,240,0.48,7));
+hills.add(makeRidge(1500,720,30,120,0.24,3));
 scene.add(hills);
 
 // ---------- materials & primitives ----------

@@ -76,8 +76,8 @@ export async function checkSpray() {
     if (a.aP0.array[i * 3 + 1] !== 2 || a.aV0.array[i * 3 + 2] !== 6) bad.push('emit position/velocity');
     if (T[i * 4] !== Math.fround(spray.clock) || Math.abs(T[i * 4 + 1] - 0.7) > 1e-6 || Math.abs(T[i * 4 + 2] - 0.3) > 1e-6 || T[i * 4 + 3] !== SPRAY_MIST) bad.push('emit t0/life/size/kind');
     // pause: the clock holds while Settings is open, and runs again after
-    const c0 = spray.clock; openSettings(); step(0.5); const c1 = spray.clock;
-    settingsEl.close(); await new Promise(r => setTimeout(r, 0)); step(0.5); const c2 = spray.clock;   // 'close' fires as its own task
+    // the game's own pause flag (what Settings sets); flipped directly, since a hidden tab won't always open the dialog
+    const c0 = spray.clock; (0, eval)('paused=true'); step(0.5); const c1 = spray.clock; (0, eval)('paused=false'); step(0.5); const c2 = spray.clock;
     if (c1 !== c0) bad.push('spray clock runs while paused');
     if (!(c2 > c1 + 0.4)) bad.push('spray clock stuck after unpause');
     // quality sets the emission rate
@@ -86,7 +86,6 @@ export async function checkSpray() {
   }
   return bad;
 }
-/* global openSettings, settingsEl */
 
 /* global trees, treeGeometry, paintFoliageAtlas, updateTreeLod, TREE_CHUNK, TREE_KINDS, setTreeDensity, LAND_P, THREE */
 export function checkTrees() {
@@ -116,6 +115,26 @@ export function checkTrees() {
   const full = trees.reduce((s, m) => s + m.userData.full, 0);
   setTreeDensity(0.5); const half = trees.reduce((s, m) => s + m.count, 0); setTreeDensity(1);
   if (Math.abs(half / full - 0.5) > 0.02) bad.push(`density 0.5 gave ${half}/${full}`);
+  return bad;
+}
+
+/* global shoreType, buildProps, props, landMat, hills, QUALITY, SHORE_SPAN, landH */
+export function checkScenery() {
+  const bad = [];
+  if (typeof shoreType !== 'function' || typeof props === 'undefined') return ['shoreType / props'];
+  for (const side of [-1, 1]) for (let z = -400; z < 400; z += 37) {
+    const a = shoreType(side, z), b = shoreType(side, z + LAND_P);
+    if (Math.abs(a.beach + a.rock + a.reed - 1) > 1e-6) { bad.push(`shoreType weights at ${side},${z}`); break; }
+    if (['beach', 'rock', 'reed'].some(k => Math.abs(a[k] - b[k]) > 1e-6)) { bad.push(`shoreType not periodic at ${side},${z}`); break; }
+    if (Math.abs(landH(side * 90, z) - landH(side * 90, z + LAND_P)) > 1e-6) { bad.push(`landH not periodic at ${side},${z}`); break; }
+  }
+  const kinds = new Set(); for (let z = -450; z < 450; z += 5) { const t = shoreType(1, z); kinds.add(t.rock > 0.5 ? 'rock' : t.reed > 0.5 ? 'reed' : 'beach'); }
+  if (kinds.size < 3) bad.push(`only ${[...kinds]} along a bank`);
+  if (props.userData.jetties !== 3 * SHORE_SPAN || props.userData.boathouses !== SHORE_SPAN) bad.push(`props: ${props.userData.jetties} jetties, ${props.userData.boathouses} boathouses`);
+  if (!landMat.onBeforeCompile || landMat.onBeforeCompile.toString().length < 50) bad.push('landMat has no ground shader');
+  if (hills.children.length !== 3) bad.push(`${hills.children.length} ridges, want 3`);
+  if (!('props' in QUALITY[0])) bad.push('QUALITY has no props field');
+  else { const q = quality; setQuality(0); const lo = props.visible; setQuality(2); const hi = props.visible; setQuality(q); if (lo || !hi) bad.push(`props visible low ${lo}, high ${hi}`); }
   return bad;
 }
 
