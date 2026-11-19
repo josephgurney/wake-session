@@ -193,15 +193,47 @@ export function lodPop() {
 }
 
 const RUNS = [{ cut: 3, mode: 'relaxed' }, { cut: 3, mode: 'hold' }, { cut: 3, mode: 'pop' }, { cut: 6, mode: 'hold' }, { cut: 6, mode: 'pop' }];
+// misses: every target in jump_bench.py's TARGETS table the runs miss, and popped 6 m jumps that don't clear the far crest
 export async function bench() {
   const src = await (await fetch('/tools/jump_bench.py?' + Date.now())).text();
   const js = src.split('RUN_JS = """')[1].split('"""')[0];
   const run = (0, eval)('(' + js + ')');
-  return RUNS.map(cfg => {
-    const r = run(cfg);
-    return { run: `${cfg.cut} m ${cfg.mode}`, result: r.result, airT: +r.airT.toFixed(3), aboveLip: +r.aboveLip.toFixed(3),
-             speedRatio: +r.speedRatio.toFixed(3), maxT: +r.maxT.toFixed(3) };
-  });
+  const targets = [...src.split('\nTARGETS = [')[1].split(']\n')[0].matchAll(/\("([^"]+)", "(\w+)", ([\d.]+), ([\d.]+), "(\w+)"\)/g)]
+    .map(m => ({ label: m[1], key: m[2], lo: +m[3], hi: +m[4], which: m[5] }));
+  if (targets.length !== 5) throw new Error(`read ${targets.length} jump targets from jump_bench.py, want 5`);
+  const raw = RUNS.map(cfg => run(cfg)), misses = [];
+  for (const t of targets) for (const r of raw) if ((t.which === 'all' || r.cfg.mode === t.which) && !(r[t.key] >= t.lo && r[t.key] <= t.hi))
+    misses.push(`${r.cfg.cut} m ${r.cfg.mode}: ${t.label} ${fmt(r[t.key])} (want ${t.lo}-${t.hi})`);
+  for (const r of raw) if (r.cfg.mode === 'pop' && r.cfg.cut === 6 && !(r.landed != null && r.landed > r.farCrest))
+    misses.push(`6 m pop: landed at ${r.landed == null ? '-' : fmt(r.landed)}, short of the far crest ${fmt(r.farCrest)}`);
+  const runs = raw.map(r => ({ run: `${r.cfg.cut} m ${r.cfg.mode}`, result: r.result, airT: +r.airT.toFixed(3), aboveLip: +r.aboveLip.toFixed(3),
+    landed: r.landed == null ? null : +r.landed.toFixed(2), farCrest: +r.farCrest.toFixed(2), speedRatio: +r.speedRatio.toFixed(3), maxT: +r.maxT.toFixed(3) }));
+  return { runs, misses };
+}
+// Riding across the trough with Space held (the line loaded), from the foot of the near wake's back face to the far
+// wake, at 4-8 m/s sideways (8 is a hard cut or a short landing), over a spread of boil phases (the stern's place on the
+// lake) and chop times: the ripples, the boil and the chop together mustn't launch the rider anywhere short of the far
+// crest's last metre (going out over the far wake loaded is a jump: that's fine, and it's where nearCrest counts it).
+// Freezes the game like bench(), so run it last.
+/* global stepRider, resetRider, BOAT_SPEED, simTime */
+export function checkTrough() {
+  physics = function () {}; gatherInput = function () {};
+  const bad = [], dt = 1 / 120;
+  let runs = 0;
+  for (let ph = 0; ph < 12; ph += 1.5) for (const t0 of [0, 1.7, 3.1]) for (const v0 of [4, 6, 7, 8]) for (const side of [1, -1]) {
+    boatZ = ph; simTime = t0; resetRider(); runs++;
+    for (let t = 0; t < 0.3; t += dt) { boatZ += BOAT_SPEED * dt; simTime += dt; stepRider(dt); }
+    const d0 = boatZ - STERN_OFF - R.pos.z;
+    R.pos.x = -side * (crestX(d0) - (1.3 + 0.04 * d0)); R.vel.x = side * v0; R.vySurf = 0; R.steerIn = side; R.loading = true;
+    for (let t = 0; t < 3; t += dt) {
+      boatZ += BOAT_SPEED * dt; simTime += dt; stepRider(dt);
+      const xc = crestX(boatZ - STERN_OFF - R.pos.z), far = side * R.pos.x > xc - 1;
+      if (R.state === 'air') { if (!far) bad.push(`launched at x=${fmt(R.pos.x)} (far crest ${fmt(side * xc)}) at ${v0} m/s, phase ${ph}, chop ${t0}`); break; }
+      if (side * R.pos.x > xc) break;
+    }
+    R.loading = false; R.steerIn = 0;
+  }
+  return bad.length > 10 ? [`${bad.length} of ${runs} crossings launched early`, ...bad.slice(0, 10)] : bad;
 }
 
 // Look from anywhere: hold the camera at pos looking at target (the game's camera code is swapped out, since any frame
@@ -248,4 +280,153 @@ export async function gpu(n = 30) {
     sum[k] += gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6; gl.deleteQuery(q);
   }
   return { refl: +(sum[0] / n).toFixed(2), main: +(sum[1] / n).toFixed(2), total: +((sum[0] + sum[1]) / n).toFixed(2) };
+}
+
+// Checks for the real wake shape (docs/superpowers/plans/2026-11-19-real-wake-shape.md): each returns the list of what's
+// wrong, empty when it all holds. Figures are the spec's, at the rider's distance unless said.
+/* global wakeH, crestX, wakeTrough, WAKE_GLSL, THREE */
+const near = (v, want, tol) => Math.abs(v - want) <= tol;
+const fmt = v => (+v).toFixed(3);
+// the shape of one side of the wake at distance d: crest, the dip outside it, the ramp and back face, the middle
+export function wakeProfile(d, ph = 0) {
+  const xc = crestX(d), h = u => wakeH(u, d, ph), du = 0.01;
+  let dip = { h: 9, s: 0 };
+  for (let s = 0.2; s <= 5; s += du) { const v = h(xc + s); if (v < dip.h) dip = { h: v, s }; }
+  const slope = (a, b) => Math.atan(Math.abs(h(a) - h(b)) / Math.abs(b - a)) / (Math.PI / 180);
+  let back = 0, inMin = 9, ripples = 0;
+  for (let s = -0.05; s >= -2.6; s -= du) back = Math.max(back, slope(xc + s, xc + s - du));
+  for (let u = 0; u < xc - 0.05; u += du) inMin = Math.min(inMin, h(u));
+  for (let s = -0.5; s >= -2.8 && xc + s > 0.3; s -= du) { const a = h(xc + s + du), b = h(xc + s), c = h(xc + s - du); if (b > a && b > c) ripples++; }
+  let mid = [9, -9]; for (let u = -0.8; u <= 0.8; u += du) { const v = h(u); mid = [Math.min(mid[0], v), Math.max(mid[1], v)]; }
+  return { xc, crest: h(xc), dip: dip.h, dipS: dip.s, lip: slope(xc + 0.02, xc + 0.08), back, ripples, inMin, mid, trough: -wakeTrough(d) };
+}
+export function checkWake() {
+  const bad = [], miss = (what, got, want) => bad.push(`${what}: ${got} (want ${want})`);
+  if (typeof wakeTrough !== 'function') return ['wakeTrough(d) missing'];
+  const p = wakeProfile(16.5);
+  if (!near(p.xc, 3.65, 0.15)) miss('crest half-width at 16.5 m', fmt(p.xc), '3.65 ±0.15');
+  if (!near(p.crest, 0.34, 0.03)) miss('crest height', fmt(p.crest), '0.34 ±0.03');
+  if (!near(p.dip, -0.29, 0.04)) miss('dip depth', fmt(p.dip), '-0.29 ±0.04');
+  if (!(p.dipS > 1.4 && p.dipS < 2.8)) miss('dip distance outside the crest', fmt(p.dipS), '1.4-2.8 m');
+  if (!(p.lip >= 28 && p.lip <= 33)) miss('lip slope deg', fmt(p.lip), '28-33');
+  if (!(p.back <= 25 && p.back >= 15)) miss('back face max slope deg', fmt(p.back), '15-25');
+  if (p.ripples < 1 || p.ripples > 2) miss('ripples inside the crest', p.ripples, '1-2');
+  if (!near(p.trough, -0.24, 0.03)) miss('middle trough level', fmt(p.trough), '-0.24 ±0.03');
+  if (!(p.mid[0] >= p.trough - 0.045 && p.mid[1] <= p.trough + 0.045)) miss('middle within ±4 cm of the trough', p.mid.map(fmt).join('..'), `${fmt(p.trough)} ±0.04`);
+  if (!(p.crest - p.inMin >= 0.55 && p.crest - p.inMin <= 0.66)) miss('trough to crest', fmt(p.crest - p.inMin), '0.55-0.65');
+  // along the course
+  const c = d => wakeH(crestX(d), d, 0), c0 = c(16.5);
+  if (!near(c(0.5), 0.15, 0.05)) miss('crest at the transom', fmt(c(0.5)), '0.15 ±0.05');
+  for (const d of [10, 13, 20]) if (c(d) < 0.9 * c0) miss(`crest at ${d} m vs 16.5 m`, fmt(c(d) / c0), '>= 0.9');
+  if (!near(c(60) / c0, 0.75, 0.08)) miss('crest at 60 m vs 16.5 m', fmt(c(60) / c0), '0.75 ±0.08');
+  if (!near(c(200) / c0, 0.55, 0.08)) miss('crest at 200 m vs 16.5 m', fmt(c(200) / c0), '0.55 ±0.08');
+  if (!near(-wakeTrough(1.5), -0.45, 0.05)) miss('trough behind the transom', fmt(-wakeTrough(1.5)), '-0.45 ±0.05');
+  if (!near(-wakeTrough(40), -0.1, 0.04)) miss('trough at 40 m', fmt(-wakeTrough(40)), '-0.10 ±0.04');
+  if (Math.abs(wakeTrough(70)) > 0.03) miss('trough at 70 m', fmt(-wakeTrough(70)), '0 ±0.03');
+  // smooth and finite everywhere: nothing ahead of the transom, no steps (2 cm apart) except right at a crest
+  for (let d = -5; d <= 300; d += d < 30 ? 0.5 : 5) {
+    const xc = crestX(Math.max(d, 0));
+    for (let u = -12; u <= 12; u += 0.02) {
+      const v = wakeH(u, d, 0.37), w = wakeH(u + 0.02, d, 0.37);
+      if (!Number.isFinite(v)) { bad.push(`not finite at u=${fmt(u)} d=${d}`); return bad; }
+      if (d <= 0 && Math.abs(v) > 0.01) { bad.push(`height ahead of the transom at u=${fmt(u)} d=${d}: ${fmt(v)}`); return bad; }
+      if (Math.abs(w - v) > 0.03 && Math.abs(Math.abs(u + 0.01) - xc) > 0.05) { bad.push(`step of ${fmt(w - v)} at u=${fmt(u)} d=${d}`); return bad; }
+    }
+  }
+  for (let u = -8; u <= 8; u += 0.25) for (let d = 0; d < 120; d += 0.02)
+    if (Math.abs(wakeH(u, d + 0.02, 0.37) - wakeH(u, d, 0.37)) > 0.03) { bad.push(`step along the course at u=${u} d=${fmt(d)}`); return bad; }
+  return bad;
+}
+// The shaders' wake() against the physics' wakeH(): render wake(u, d, ph).x on a grid into a float target and compare.
+// Returns the samples more than 1 mm apart (and shader errors), empty when they agree.
+/* global renderer */
+export function checkWakeGPU(ph = 0.37) {
+  const NU = 121, ND = 98, uAt = i => -12 + i * 0.2, dAt = j => (j < 70 ? -5 + j * 0.5 : 30 + (j - 70) * 10);
+  const rt = new THREE.WebGLRenderTarget(NU, ND, { type: THREE.FloatType, format: THREE.RGBAFormat, depthBuffer: false });
+  const mat = new THREE.ShaderMaterial({ uniforms: { uPh: { value: ph } },
+    vertexShader: 'void main(){ gl_Position=vec4(position.xy,0.0,1.0); }',
+    fragmentShader: `uniform float uPh; ${WAKE_GLSL}
+      void main(){ float i=floor(gl_FragCoord.x), j=floor(gl_FragCoord.y);
+        float u=-12.0+i*0.2, d=j<70.0?-5.0+j*0.5:30.0+(j-70.0)*10.0;
+        gl_FragColor=vec4(wake(u,d,uPh).x,0.0,0.0,1.0); }` });
+  const sc = new THREE.Scene(), q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat); q.frustumCulled = false; sc.add(q);
+  const prev = renderer.getRenderTarget(), errs = [], log = console.error; console.error = (...a) => { errs.push(a.join(' ').slice(0, 300)); };
+  renderer.setRenderTarget(rt); renderer.render(sc, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)); renderer.setRenderTarget(prev);
+  console.error = log;
+  const px = new Float32Array(NU * ND * 4); renderer.readRenderTargetPixels(rt, 0, 0, NU, ND, px);
+  rt.dispose(); mat.dispose(); q.geometry.dispose();
+  if (errs.length) return errs;
+  const bad = [];
+  for (let j = 0; j < ND; j++) for (let i = 0; i < NU; i++) {
+    const g = px[(j * NU + i) * 4], c = wakeH(uAt(i), dAt(j), ph);
+    if (!(Math.abs(g - c) <= 0.001)) bad.push(`u=${uAt(i).toFixed(1)} d=${dAt(j)}: gpu ${fmt(g)} cpu ${fmt(c)}`);
+  }
+  return bad.length > 12 ? [...bad.slice(0, 12), `...and ${bad.length - 12} more`] : bad;
+}
+// The water grid across the wake: fine columns within ±12 m of the boat's track at the setting's `fine` spacing, the
+// grid centred on the track, and the GPU cost on high within 15% of a baseline: the v0.7.0 page's best of five gpu(40)
+// runs from the same camera, taken in the same session (GPU timings swing a lot run to run; the best is the steadiest).
+// On this Mac's pane that was 8.98 ms from the follow camera.
+/* global waterNear, QUALITY */
+export async function bestGpu(n = 5) { let b = 1e9; for (let i = 0; i < n; i++) { step(0.2); b = Math.min(b, (await gpu(40)).total); } return b; }
+export async function checkWater(baseMs = 8.98) {
+  const bad = [], Q = QUALITY[quality];
+  if (!Q.fine) return [`QUALITY[${quality}].fine missing`];
+  const pos = waterNear.geometry.attributes.position, z0 = pos.getZ(0), xs = [];
+  for (let i = 0; i < pos.count && pos.getZ(i) === z0; i++) xs.push(pos.getX(i));
+  let gap = 0; for (let i = 1; i < xs.length; i++) if (Math.abs(xs[i]) <= 12 && Math.abs(xs[i - 1]) <= 12) gap = Math.max(gap, xs[i] - xs[i - 1]);
+  if (Math.abs(gap - Q.fine) > 0.01) bad.push(`spacing across the wake ${fmt(gap)} m (want ${Q.fine})`);
+  if (waterNear.position.x !== 0) bad.push(`grid centred at x=${waterNear.position.x} (want 0, the boat's track)`);
+  if (quality === 2 && baseMs) { const g = await bestGpu(); if (g > baseMs * 1.15) bad.push(`gpu ${g} ms on high (want <= ${fmt(baseMs * 1.15)})`); }
+  return bad;
+}
+// What counts as a wake jump: taking off within a metre of a crest, not from the dip outside it or the trough inside.
+/* global nearCrest, wakeToWake */
+export function checkScoring() {
+  if (typeof nearCrest !== 'function') return ['nearCrest(u, d) missing'];
+  if (typeof wakeToWake !== 'function') return ['wakeToWake(takeoffU, x, d) missing'];
+  const d = 16.5, xc = crestX(d), bad = [];
+  // wake to wake: down on the other side, past the far crest (not on its upslope short of it)
+  for (const [u0, x, want, what] of [[-xc, xc + 0.3, true, 'just past the far crest'], [-xc, xc - 0.3, false, 'on the far upslope, 0.3 m short'],
+    [xc, -(xc + 1), true, 'past the far crest, other way'], [-xc, -(xc + 1), false, 'back on the same side'], [-xc, 0.5, false, 'in the trough']])
+    if (wakeToWake(u0, x, d) !== want) bad.push(`wake to wake, ${what}: ${want ? "doesn't count" : 'counts'}`);
+  for (const [u, want, what] of [[xc - 0.3, true, 'the lip, just inside'], [-(xc + 0.4), true, 'the ramp below the lip'], [xc + 2.1, false, 'the dip outside'],
+    [0, false, 'the middle of the trough'], [-(xc - 1.6), false, 'the foot of the back face'], [xc + 6, false, 'the flats']])
+    if (nearCrest(u, d) !== want) bad.push(`${what} (u=${fmt(u)}): ${!want ? 'counts' : "doesn't count"} as a wake takeoff`);
+  return bad;
+}
+// The rest of jump_bench.py, in the page: its TRICKS, CRASHES and GRABS tables, read from the .py and judged the same
+// way, after bench()'s runs. Returns { misses } (empty when the whole bench passes) and the rows. Freezes the game.
+export async function benchAll() {
+  const src = await (await fetch('/tools/jump_bench.py?' + Date.now())).text();
+  const js = src.split('RUN_JS = """')[1].split('"""')[0], run = (0, eval)('(' + js + ')');
+  const table = name => (0, eval)('[' + src.split(`\n${name} = [`)[1].split('\n]')[0]
+    .replace(/\((-?\d+), (True|False)\)/g, '[$1, $2]').replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null') + ']');
+  const crashT = [...src.split('CRASH_TARGETS = [')[1].split(']\n')[0].matchAll(/\("(\w+)", "([^"]+)", (-?[\d.]+), (-?[\d.]+)\)/g)].map(m => [m[1], m[2], +m[3], +m[4]]);
+  const crashOk = c => crashT.every(([k, , lo, hi]) => c[k] >= lo && c[k] <= hi);
+  const b = await bench(), misses = [...b.misses], rows = {};
+  rows.tricks = table('TRICKS').map(tr => {
+    const r = run({ cut: 6, mode: 'pop', trick: tr }), per = tr.axis === 'spin' ? 180 : 360, landsAs = Math.round(r.rot / per) * per, rode = r.result === 'landed';
+    const [wantRot, wantRide] = tr.expect, ok = rode === wantRide && (landsAs === wantRot || !wantRide);
+    if (!ok) misses.push(`trick ${tr.name}: turned ${Math.round(r.rot)}, lands as ${landsAs}, ${rode ? 'rode away' : r.failReason || r.result}`);
+    return { name: tr.name, rot: Math.round(r.rot), landsAs, rode, landing: r.landingSpeed && +r.landingSpeed.toFixed(2) };
+  });
+  rows.crashes = table('CRASHES').map(spec => {
+    const r = run({ cut: 3, mode: 'pop', trick: spec.trick, follow: true }), c = r.crash;
+    let ok = !!c && (r.failReason || '').includes(spec.reason) && crashOk(c);
+    if (c && spec.fall === 'up') ok = ok && c.chest > 0.3; if (c && spec.fall === 'down') ok = ok && c.chest < -0.3;
+    if (!ok) misses.push(`crash ${spec.name}: ${c ? JSON.stringify(Object.fromEntries(Object.entries(c).map(([k, v]) => [k, +v.toFixed(2)]))) : 'no crash'} ${r.failReason || r.result}`);
+    return { name: spec.name, reason: r.failReason, crash: c };
+  });
+  const plain = b.runs.find(r => r.run === '6 m pop');
+  rows.grabs = table('GRABS').map(g => {
+    const until = g.until === 'late' ? plain.airT - 0.12 : g.until;
+    const r = run({ cut: 6, mode: 'pop', grab: { name: g.grab, from: g.from, until }, follow: !g.ride });
+    const text = (r.shown || []).filter((x, i) => i % 2 === 0 && x).join(' | '), rode = r.result === 'landed';
+    let ok = rode === g.ride && g.has.every(h => text.includes(h)) && !g.not.some(n => text.includes(n));
+    if (r.crash) ok = ok && crashOk(r.crash);
+    if (!ok) misses.push(`grab ${g.name}: ${rode ? 'rode away' : r.failReason || r.result}, "${text}"`);
+    return { name: g.name, text, rode };
+  });
+  return { misses, runs: b.runs, ...rows };
 }

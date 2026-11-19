@@ -58,7 +58,7 @@ TRICKS = [
 # Crashes off a popped 3 m jump, followed through the ragdoll. `fall` is which way the chest should face 0.3 s in:
 # 'up' (thrown on their back), 'down' (thrown on their face) or None.
 CRASHES = [
-    {"name": "heel edge catch", "trick": {"axis": "spin", "charge": 0.24, "after": "open", "dir": 1}, "reason": "heel edge", "fall": "up"},
+    {"name": "heel edge catch", "trick": {"axis": "spin", "charge": 0.2, "after": "open", "dir": 1}, "reason": "heel edge", "fall": "up"},
     {"name": "toe edge catch", "trick": {"axis": "spin", "charge": 0.24, "after": "open", "dir": -1}, "reason": "toe edge", "fall": "down"},
     {"name": "short backroll", "trick": {"axis": "flip", "charge": 0.3, "after": "relax"}, "reason": "Under-rotated the backroll", "fall": None},
 ]
@@ -228,10 +228,11 @@ def report(results):
         ok = all(lo <= v <= hi for v in vals)
         ok_all &= ok
         print(f"{'PASS' if ok else 'MISS'}  {label:<38} target {lo}-{hi}   got {', '.join(f'{v:.2f}' for v in vals)}")
-    cleared = [r for r in results if r["cfg"]["mode"] == "pop"]
+    # the wake is 24 ft wide at 65 ft (as measured): from a 3 m cut-out a pop lands on the far wake, not past it
+    cleared = [r for r in results if r["cfg"]["mode"] == "pop" and r["cfg"]["cut"] == 6]
     ok = all(r["landed"] is not None and r["landed"] > r["farCrest"] for r in cleared)
     ok_all &= ok
-    print(f"{'PASS' if ok else 'MISS'}  {'Popped jumps clear the second wake':<38}")
+    print(f"{'PASS' if ok else 'MISS'}  {'Popped 6 m jumps clear the second wake':<38}")
     return ok_all
 
 

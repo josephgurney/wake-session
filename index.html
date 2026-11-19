@@ -343,7 +343,7 @@ body.touch .card .grid.tc{display:grid}
     </div>
     <div class="card">
       <!-- the game's version: bump it with every change that lands on main, so a stale cache shows at a glance -->
-      <div class="ver" title="Game version">v0.7.0</div>
+      <div class="ver" title="Game version">v0.8.0</div>
       <div class="presents"><img src="assets/lobster-logo.svg" alt="Lobster Eyewear" width="692" height="349"><span>presents</span></div>
       <h1>Thursday <em>Yacht Club</em></h1>
       <div class="tagline">No Risk, No Story.</div>
@@ -512,7 +512,7 @@ const GRIP=8.5, A_MAX=8.5, DRAG=0.03, EDGE_LD=3.0; // the edge's side force come
 // the body (charge L, harder off a bigger pop); after that the same inputs only change body shape. Holding the rotation
 // tucks (spins about 1.7x faster, inverts nearly 3x), letting go relaxes, pushing the other way opens up to slow it for
 // the landing. Rate = L / I(shape). I is in kg m^2 (diver and rider estimates); L in those units times degrees/s.
-const ROT={spin:{open:3.8,tight:2.0,Lmax:1100,period:180},flip:{open:13,tight:4.5,Lmax:1750,period:360},roll:{open:13,tight:4.5,Lmax:1750,period:360}};
+const ROT={spin:{open:3.8,tight:2.0,Lmax:960,period:180},flip:{open:13,tight:4.5,Lmax:1450,period:360},roll:{open:13,tight:4.5,Lmax:1450,period:360}};
 const TAKEOFF_WINDOW=0.45, CHARGE_TIME=0.25; // when a rotation can still be started after leaving the lip; how long a full one takes to wind in
 const ASSIST_MAX=25;          // degrees: the most the rider can reorient in the last moment before landing
 const RIDER_M=80;            // rider plus board, kg
@@ -521,41 +521,88 @@ const HANDLE_MAX=2.8;        // line pull, in body weights, that rips the handle
 const ABSORB=2.4;            // vertical speed (m/s) relaxed legs soak up going over a wake, like skiing moguls
 
 // ---------- water surface (shared CPU/GPU) ----------
+// The wake, from measured wakes (Goudey & Girod 2015: a ballasted 23 ft wake boat at 22 mph) and how riders describe
+// them. Lateral offset u, distance d behind the transom, s = |u| - crest (positive outside). One side, outside in:
+// flat lake, a dip (near the boat deeper than the crest is tall), a concave ramp kicking to about 30 degrees at a crisp
+// lip, a gentler back face (the wave runs outward, so its back is the long side) with a ripple or two behind it, then
+// the trough: one wide hollow the hull digs between the wakes, with the prop wash boiling down the middle. The crests
+// fan out at about 9 degrees (Rabaud & Moisy: narrower than Kelvin's 19.5 at this boat's Froude number), so a 65 ft
+// line meets them 7.3 m apart. Close to the boat it's steep and narrow; further back lower, wider and rounder, and it
+// fades slowly, so the V runs a long way down the lake. ph is the stern's lake position mod WAKE_PH_PERIOD (reduced on
+// the CPU, so no shader takes sin() of a raw world position): it fixes the boil to the water, not the boat.
+const WAKE_PH_PERIOD=12;
 const WAKE_GLSL = `
-vec2 wake(float u, float d){
+float wakeTrough(float d){ return d <= 0.0 ? 0.0 : 0.46*exp(-pow(d/24.0, 1.3)); }
+// the terms that depend only on d, worked out once when a pixel samples the wake more than once
+struct WakeK { float xc, A, T, D, W, Lb, rho, rip, boil, ramp; };
+WakeK wakeK(float d){
+  WakeK k;
+  k.xc = 1.1 + 0.155*d;
+  k.A = 0.354*(1.0 - 0.58*exp(-d/4.5))*pow(1.0 + max(d - 14.0, 0.0)/28.6, -0.3);
+  k.T = wakeTrough(d);
+  k.D = 0.5 + 0.95*exp(-d/16.0); k.W = 1.3 + 0.051*d; k.Lb = 1.3 + 0.04*d;
+  k.rho = 0.35 + 0.5*(1.0 - exp(-d/60.0));
+  k.rip = k.A*0.13*exp(-d/120.0);
+  k.boil = 0.035*smoothstep(0.0, 2.0, d)*(1.0 - smoothstep(15.0, 40.0, d));
+  k.ramp = smoothstep(0.0, 0.6, d);
+  return k;
+}
+// the height at offset u, before the ramp-in at the transom
+float wakeP(float u, float d, float ph, WakeK k){
+  float au = abs(u), s = au - k.xc, h;
+  if (s >= 0.0) {
+    if (s < k.W) { float r = 1.0 - s/k.W; h = k.A*((1.0 + k.D)*r*r - k.D); }
+    else h = -k.A*k.D*(1.0 - smoothstep(0.0, k.W, s - k.W));
+  } else {
+    float t = -s, lam = 1.5, t0 = k.Lb - 0.3, t1 = t0 + 0.6;
+    h = -k.T + (k.A + k.T)*(1.0 - smoothstep(0.0, k.Lb, t));
+    h += k.rip*pow(k.rho, (t - t1)/lam)*cos(6.2831853*(t - t1)/lam)*smoothstep(t0, t1, t)*smoothstep(0.5, 1.3, au);
+  }
+  float z = ph - d;
+  h += k.boil*(1.0 - smoothstep(0.5, 1.4, au))*sin(1.5707963*z + 2.2*u + 0.4)*cos(1.0471976*z - 1.6*u + 1.1);
+  return h;
+}
+vec2 wake(float u, float d, float ph){
   if (d <= 0.0) return vec2(0.0);
-  float xc = 0.9 + d*0.10510;
-  float A = 0.62*(d/18.0)*exp(1.0 - d/18.0);
-  float W = 1.2 + 0.04*d;
-  float s = abs(u) - xc;
-  float h = 0.0;
-  if (s < 0.0) h = exp(-s*s/0.30);
-  else if (s < W) { float r = 1.0 - s/W; h = r*r; }
-  float t = s + 1.2;
-  h -= 0.5*exp(-t*t/0.5);
-  return vec2(A*h, h);
+  WakeK k = wakeK(d);
+  float s = abs(u) - k.xc;
+  return vec2(k.ramp*wakeP(u, d, ph, k), exp(-s*s/0.2));
 }
 float ambient(float x, float z, float t){
   return 0.045*sin(x*0.5+z*0.25+t*1.1) + 0.035*sin(x*0.22-z*0.45+t*0.8) + 0.015*sin((x+z)*1.2+t*2.0);
 }`;
-// Cross-section of one wake: outside, a ramp that gets steeper right up to a crisp lip (about 30 degrees at the
-// rider's distance), so the board leaves at the top instead of rolling off a rounded shoulder; inside, a steep face
-// dropping into a trough. Height peaks about 18 m behind the stern, where a 65 ft line puts the rider.
-function wakeH(u,d){
+// The same, line for line, for the physics (tools/probe.js checkWakeGPU() holds them to within a millimetre).
+function wakeTrough(d){ return d<=0?0:0.46*Math.exp(-Math.pow(d/24,1.3)); }
+function wakeH(u,d,ph=0){
   if(d<=0) return 0;
-  const xc=0.9+d*0.10510;
-  const A=0.62*(d/18)*Math.exp(1-d/18);
-  const W=1.2+0.04*d;
-  const s=Math.abs(u)-xc;
-  let h=0;
-  if(s<0) h=Math.exp(-s*s/0.30);
-  else if(s<W){ const r=1-s/W; h=r*r; }
-  const t=s+1.2; h-=0.5*Math.exp(-t*t/0.5);
-  return A*h;
+  const xc=1.1+0.155*d;
+  const A=0.354*(1-0.58*Math.exp(-d/4.5))*Math.pow(1+Math.max(d-14,0)/28.6,-0.3);
+  const T=wakeTrough(d);
+  const au=Math.abs(u), s=au-xc; let h;
+  if(s>=0){
+    const D=0.5+0.95*Math.exp(-d/16), W=1.3+0.051*d;
+    if(s<W){ const r=1-s/W; h=A*((1+D)*r*r-D); }
+    else h=-A*D*(1-smoothstep(0,W,s-W));
+  } else {
+    const t=-s, Lb=1.3+0.04*d;
+    h=-T+(A+T)*(1-smoothstep(0,Lb,t));
+    const lam=1.5, t0=Lb-0.3, t1=t0+0.6, rho=0.35+0.5*(1-Math.exp(-d/60));
+    h+=A*0.13*Math.exp(-d/120)*Math.pow(rho,(t-t1)/lam)*Math.cos(6.2831853*(t-t1)/lam)*smoothstep(t0,t1,t)*smoothstep(0.5,1.3,au);
+  }
+  const z=ph-d;
+  h+=0.035*smoothstep(0,2,d)*(1-smoothstep(15,40,d))*(1-smoothstep(0.5,1.4,au))
+    *Math.sin(1.5707963*z+2.2*u+0.4)*Math.cos(1.0471976*z-1.6*u+1.1);
+  return smoothstep(0,0.6,d)*h;
 }
-const crestX = d => 0.9 + Math.max(0,d)*0.10510;
+const crestX = d => 1.1 + Math.max(0,d)*0.155;
+// a takeoff counts as a wake jump within a metre of a crest: not from the dip outside it or the trough inside
+function nearCrest(u,d){ return Math.abs(Math.abs(u)-crestX(d))<1; }
+// wake to wake: taken off one side, down on the other past the far crest
+function wakeToWake(takeoffU,x,d){ return Math.sign(x)===-Math.sign(takeoffU||1) && Math.abs(x)>crestX(d); }
+// the stern's place on the lake, reduced: what wakeH and the shaders' uWakePh take as ph
+const wakePh = boatZ => { const z=(boatZ-STERN_OFF)%WAKE_PH_PERIOD; return z<0?z+WAKE_PH_PERIOD:z; };
 function ambientH(x,z,t){ return 0.045*Math.sin(x*0.5+z*0.25+t*1.1)+0.035*Math.sin(x*0.22-z*0.45+t*0.8)+0.015*Math.sin((x+z)*1.2+t*2.0); }
-function waterAt(x,z,boatZ,t){ return wakeH(x, boatZ-STERN_OFF-z) + ambientH(x,z,t); }
+function waterAt(x,z,boatZ,t){ return wakeH(x, boatZ-STERN_OFF-z, wakePh(boatZ)) + ambientH(x,z,t); }
 function surfaceNormal(x,z,boatZ,t,out){
   const e=0.12;
   const hx=(waterAt(x-e,z,boatZ,t)-waterAt(x+e,z,boatZ,t))/(2*e);
@@ -726,33 +773,35 @@ function renderReflection(){
 }
 
 // ---------- water ----------
-const waterUniforms={uTime:{value:0},uBoat:{value:V3()},uNear:{value:1},uDetail:{value:1},uSun:{value:SUN},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR},uRefl:{value:null},uTexMat:{value:reflTexMat},uReflOn:{value:1},uGlit:{value:0.12},uNearRect:{value:new THREE.Vector4()}};
+const waterUniforms={uTime:{value:0},uBoat:{value:V3()},uWakePh:{value:0},uNear:{value:1},uDetail:{value:1},uSun:{value:SUN},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR},uRefl:{value:null},uTexMat:{value:reflTexMat},uReflOn:{value:1},uGlit:{value:0.12},uNearRect:{value:new THREE.Vector4()}};
 function waterMaterial(near){
   const u=THREE.UniformsUtils.merge([THREE.UniformsLib.lights,waterUniforms]);
   u.uNear.value=near; u.uRefl.value=reflRT.texture; u.uTexMat.value=reflTexMat; u.uSun.value=SUN; u.uFog.value=FOG_COLOR;
   return new THREE.ShaderMaterial({uniforms:u,lights:true,
     vertexShader:`#include <common>
       #include <shadowmap_pars_vertex>
-      uniform float uTime; uniform vec3 uBoat; uniform float uNear; uniform mat4 uTexMat;
+      uniform float uTime; uniform vec3 uBoat; uniform float uWakePh; uniform float uNear; uniform mat4 uTexMat;
       varying vec3 vWorld; varying vec3 vFoam; varying vec3 vN; varying vec4 vRefl; ${WAKE_GLSL}
-      float H(vec2 xz){ return wake(xz.x-uBoat.x, uBoat.z-xz.y).x + ambient(xz.x,xz.y,uTime); }
       void main(){
         vec4 wp=modelMatrix*vec4(position,1.0);
         float u=wp.x-uBoat.x; float d=uBoat.z-wp.z;
-        vec2 w=wake(u,d);
-        float h0=w.x+ambient(wp.x,wp.z,uTime);
-        wp.y=uNear*h0;
+        vec2 w=wake(u,d,uWakePh);
+        float a0=ambient(wp.x,wp.z,uTime);
+        // the wake's height fades out over the grid's last few metres, so it meets the flat far plane without a step;
+        // its shape carries on there in the per-pixel normals
+        float edge=(1.0-smoothstep(100.0,114.0,abs(position.z)))*(1.0-smoothstep(60.0,69.0,abs(position.x)));
+        wp.y=uNear*(edge*w.x+a0);
+        // the vertex normal is the chop's alone (as slopes); the wake's is worked out per pixel from the formula
         float e=0.25;
-        float hx=H(wp.xz+vec2(e,0.0)); float hz=H(wp.xz+vec2(0.0,e));
-        vN=(uNear>0.5)?normalize(vec3((h0-hx)/e,1.0,(h0-hz)/e)):vec3(0.0,1.0,0.0);
+        vN=(uNear>0.5)?vec3((a0-ambient(wp.x+e,wp.z,uTime))/e,1.0,(a0-ambient(wp.x,wp.z+e,uTime))/e):vec3(0.0,1.0,0.0);
         // foam sources: the lip itself, foam spilling down the inside face, and the prop wash column.
         // Branch rather than multiply by zero: ahead of the boat the smoothstep edges cross and the result is
         // undefined, and 0*NaN is still NaN, which then interpolates across whole triangles as white patches.
         vFoam=vec3(0.0);
         if(uNear>0.5 && d>0.0 && d<300.0){
-          float xc=0.9+d*0.10510; float s=abs(u)-xc;
+          float xc=1.1+d*0.155; float s=abs(u)-xc;
           float lip=smoothstep(0.74,0.98,w.y)*smoothstep(0.0,2.5,d)*exp(-d/14.0);
-          float spill=(1.0-smoothstep(0.0,1.4,abs(s+0.7)))*smoothstep(1.0,5.0,d)*exp(-d/20.0)*0.42;
+          float spill=(1.0-smoothstep(0.0,1.6,abs(s+0.9)))*smoothstep(1.0,5.0,d)*exp(-d/20.0)*0.42;
           float hw=1.1+0.045*d; float wash=(1.0-smoothstep(hw*0.35,hw,abs(u)))*exp(-d/13.0);
           vFoam=vec3(lip,spill,wash);
         }
@@ -769,9 +818,22 @@ function waterMaterial(near){
       #include <lights_pars_begin>
       #include <shadowmap_pars_fragment>
       uniform float uDetail; uniform vec3 uFog; uniform float uFogNear; uniform float uFogFar; uniform sampler2D uRefl; uniform float uReflOn; uniform float uGlit;
-      uniform float uNear; uniform vec4 uNearRect;
+      uniform float uNear; uniform vec4 uNearRect; uniform vec3 uBoat; uniform float uWakePh;
       varying vec3 vWorld; varying vec3 vFoam; varying vec3 vN; varying vec4 vRefl;
-      ${NOISE_GLSL} ${SKY_GLSL}
+      ${NOISE_GLSL} ${SKY_GLSL} ${WAKE_GLSL}
+      // the wake's slope (dh/dx, dh/dz) at this pixel, from the same formula the physics uses, so the lip and ripples
+      // shade crisply between vertices and the V carries on down the far plane. Differenced wider with distance, which
+      // softens the lip far off rather than letting it sparkle. Along the course the shape mostly just moves out with
+      // the crest line (0.155 m per m), so dh/dz is taken from dh/dx: two samples a pixel instead of three.
+      vec2 wakeSlope(vec2 xz, float dist){
+        float u=xz.x-uBoat.x, d=uBoat.z-xz.y;
+        if(d<=0.0) return vec2(0.0);
+        WakeK k=wakeK(d);
+        if(abs(u)-k.xc > 2.0*k.W+0.5) return vec2(0.0);
+        float e=0.04+dist*0.002;
+        float hu=k.ramp*(wakeP(u+e,d,uWakePh,k)-wakeP(u,d,uWakePh,k))/e;
+        return vec2(hu, 0.155*sign(u)*hu);
+      }
       float chop(vec2 p){
         float h=vnoise(p*1.6+vec2(uTime*0.30,uTime*0.10))*0.5;
         h+=vnoise(p*3.7-vec2(uTime*0.18,uTime*0.36))*0.26;
@@ -788,7 +850,8 @@ function waterMaterial(near){
         // fine ripple normals from a small animated height field; strength fades with distance so the horizon stays calm
         float e=0.05+dist*0.003; float amp=0.085/(1.0+dist*0.014);
         float c0=chop(xz), cx=chop(xz+vec2(e,0.0)), cz=chop(xz+vec2(0.0,e));
-        vec3 N=normalize(vec3(vN.x+(c0-cx)/e*amp, 1.0, vN.z+(c0-cz)/e*amp));
+        vec2 ws=wakeSlope(xz,dist);
+        vec3 N=normalize(vec3(vN.x-ws.x+(c0-cx)/e*amp, 1.0, vN.z-ws.y+(c0-cz)/e*amp));
         float shadow=1.0;
         #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
           shadow=getShadow(directionalShadowMap[0],directionalLightShadows[0].shadowMapSize,directionalLightShadows[0].shadowIntensity,directionalLightShadows[0].shadowBias,directionalLightShadows[0].shadowRadius,vDirectionalShadowCoord[0]);
@@ -829,27 +892,35 @@ function waterMaterial(near){
         gl_FragColor=vec4(col,1.0);
       }`});
 }
-function gridGeometry(w,l,sp){
-  const nx=Math.round(w/sp)+1, nz=Math.round(l/sp)+1;
+// A grid w wide and l long, sp between vertices. With fine={half,sp}, the columns within ±half of the centre are fine.sp
+// apart instead (the wake needs about 0.2 m to show a 30 degree lip and its ripples); it reaches exactly ±w/2.
+function gridGeometry(w,l,sp,fine){
+  const xs=[];
+  if(fine){ const nf=Math.round(2*fine.half/fine.sp), no=Math.round((w/2-fine.half)/sp), so=(w/2-fine.half)/no;
+    for(let i=no;i>0;i--)xs.push(-fine.half-i*so); for(let i=0;i<=nf;i++)xs.push(-fine.half+i*2*fine.half/nf); for(let i=1;i<=no;i++)xs.push(fine.half+i*so); }
+  else { const n=Math.round(w/sp); for(let i=0;i<=n;i++)xs.push((i-n/2)*sp); }
+  const nx=xs.length, nz=Math.round(l/sp)+1;
   const pos=new Float32Array(nx*nz*3); let k=0;
-  for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){pos[k++]=(i-(nx-1)/2)*sp;pos[k++]=0;pos[k++]=(j-(nz-1)/2)*sp;}
+  for(let j=0;j<nz;j++)for(let i=0;i<nx;i++){pos[k++]=xs[i];pos[k++]=0;pos[k++]=(j-(nz-1)/2)*sp;}
   const idx=new Uint32Array((nx-1)*(nz-1)*6); k=0;
   for(let j=0;j<nz-1;j++)for(let i=0;i<nx-1;i++){const a=j*nx+i,b=a+1,c=a+nx,d=c+1;idx[k++]=a;idx[k++]=c;idx[k++]=b;idx[k++]=b;idx[k++]=c;idx[k++]=d;}
-  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setIndex(new THREE.BufferAttribute(idx,1)); return g;
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3)); g.setIndex(new THREE.BufferAttribute(idx,1));
+  g.userData.half=[xs[nx-1],(nz-1)*sp/2]; return g;
 }
-let WATER_SP=0.7;
-const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP),waterMaterial(1)); waterNear.frustumCulled=false; waterNear.receiveShadow=true; scene.add(waterNear);
+let WATER_SP=0.7; const _wDir=V3();
+const WATER_FINE=12; // the fine band runs ±12 m either side of the boat's track: the wake out to about 70 m behind it
+const waterNear=new THREE.Mesh(gridGeometry(140,230,WATER_SP,{half:WATER_FINE,sp:0.2}),waterMaterial(1)); waterNear.frustumCulled=false; waterNear.receiveShadow=true; scene.add(waterNear);
 const waterFar=new THREE.Mesh(gridGeometry(9000,9000,1500),waterMaterial(0)); waterFar.frustumCulled=false; waterFar.position.y=-0.02; scene.add(waterFar);
 // quality: 2 high, 1 medium, 0 low. Auto mode steps down when frames run long, back up when there is headroom.
 const QUALITY=[
-  {name:'low',sp:1.4,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.3,treeFar:-1e9,treeHide:900,reflTrees:0,spray:0.25,sprayN:4096,props:false},
-  {name:'medium',sp:1.0,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.55,treeFar:180,treeHide:1200,reflTrees:550,spray:0.6,sprayN:8192,props:true},
-  {name:'high',sp:0.7,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,treeFar:350,treeHide:1550,reflTrees:1550,spray:1,sprayN:16384,props:true}];
+  {name:'low',sp:1.4,fine:0.45,pr:1,detail:0,refl:0,bloom:false,shadow:1024,trees:0.3,treeFar:-1e9,treeHide:900,reflTrees:0,spray:0.25,sprayN:4096,props:false},
+  {name:'medium',sp:1.0,fine:0.3,pr:1.25,detail:1,refl:0.35,bloom:true,shadow:1024,trees:0.55,treeFar:180,treeHide:1200,reflTrees:550,spray:0.6,sprayN:8192,props:true},
+  {name:'high',sp:0.7,fine:0.2,pr:1.75,detail:1,refl:0.5,bloom:true,shadow:2048,trees:1,treeFar:350,treeHide:1550,reflTrees:1550,spray:1,sprayN:16384,props:true}];
 const waterGeos={}; let quality=2, qualityAuto=true, frameEMA=1/60, qualityTimer=0;
 function setQuality(q){
   q=clamp(q,0,QUALITY.length-1); quality=q; const Q=QUALITY[q];
-  if(!waterGeos[Q.sp])waterGeos[Q.sp]=gridGeometry(140,230,Q.sp);
-  waterNear.geometry=waterGeos[Q.sp]; WATER_SP=Q.sp;
+  const gk=Q.sp+'/'+Q.fine; if(!waterGeos[gk])waterGeos[gk]=gridGeometry(140,230,Q.sp,{half:WATER_FINE,sp:Q.fine});
+  waterNear.geometry=waterGeos[gk]; WATER_SP=Q.sp;
   reflOn=Q.refl>0; reflScale=Q.refl||0.25; post.bloomOn=Q.bloom;
   for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uDetail.value=Q.detail; m.uniforms.uReflOn.value=reflOn?1:0; }
   if(sun.shadow.mapSize.x!==Q.shadow){ sun.shadow.mapSize.set(Q.shadow,Q.shadow); if(sun.shadow.map){sun.shadow.map.dispose(); sun.shadow.map=null;} }
@@ -2521,9 +2592,9 @@ class Spray{
     const attr=(name,size)=>{ const a=new THREE.InstancedBufferAttribute(new Float32Array(n*size),size); a.setUsage(THREE.DynamicDrawUsage); g.setAttribute(name,a); return a; };
     this.aP0=attr('aP0',3); this.aV0=attr('aV0',3); this.aT=attr('aT',4); g.instanceCount=n; this.geo=g;
     const m=new THREE.ShaderMaterial({transparent:true,depthWrite:false,
-      uniforms:{uClock:{value:0},uWaterT:{value:0},uBoat:{value:V3()},uSun:{value:SUN},uViewH:{value:innerHeight},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR}},
+      uniforms:{uClock:{value:0},uWaterT:{value:0},uBoat:{value:V3()},uWakePh:{value:0},uSun:{value:SUN},uViewH:{value:innerHeight},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR}},
       vertexShader:`attribute vec3 aP0; attribute vec3 aV0; attribute vec4 aT;
-        uniform float uClock; uniform float uWaterT; uniform vec3 uBoat; uniform vec3 uSun; uniform float uViewH; uniform float uFogNear; uniform float uFogFar;
+        uniform float uClock; uniform float uWaterT; uniform vec3 uBoat; uniform float uWakePh; uniform vec3 uSun; uniform float uViewH; uniform float uFogNear; uniform float uFogFar;
         varying vec2 vUv; varying float vA; varying float vKind; varying float vSeed; varying vec3 vLight; varying float vFog;
         ${WAKE_GLSL}
         void main(){
@@ -2534,7 +2605,7 @@ class Spray{
           vec3 vel=vec3(aV0.x*e,aV0.y-g*tau,aV0.z*e);
           if(kind<1.5) p.y=aP0.y+aV0.y*tau-0.5*g*tau*tau;
           else { p.y=aP0.y+aV0.y*(1.0-e)/k+0.18*tau; vel.y=aV0.y*e+0.18; }
-          float h=wake(p.x-uBoat.x,uBoat.z-p.z).x+ambient(p.x,p.z,uWaterT);
+          float h=wake(p.x-uBoat.x,uBoat.z-p.z,uWakePh).x+ambient(p.x,p.z,uWaterT);
           if(kind<1.5 && tau>0.05 && p.y<h-0.02){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }   // back in the lake
           float grow=kind<0.5?1.0:(kind<1.5?1.0+0.8*age:1.0+1.5*age);
           float w=0.5*size*grow;
@@ -2586,7 +2657,7 @@ class Spray{
   emitRate(acc,key,rate,dt,fn){ acc[key]=(acc[key]||0)+rate*dt*this.rate; while(acc[key]>=1){ acc[key]-=1; fn(); } }
   update(dt){
     this.clock+=dt;
-    const u=this.mat.uniforms; u.uClock.value=this.clock; u.uWaterT.value=simTime; u.uBoat.value.set(0,0,boatZ-STERN_OFF);
+    const u=this.mat.uniforms; u.uClock.value=this.clock; u.uWaterT.value=simTime; u.uBoat.value.set(0,0,boatZ-STERN_OFF); u.uWakePh.value=wakePh(boatZ);
     if(this.dn>0){
       for(const a of [this.aP0,this.aV0,this.aT]){
         const s=a.itemSize; a.clearUpdateRanges();
@@ -2676,7 +2747,7 @@ function resetRider(){
 }
 function takeoff(vy,popped){
   R.state='air'; R.airT=0; R.vel.y=vy; R.spin=R.flip=R.roll=0; R.spinVel=R.flipVel=R.rollVel=0; R.maxH=0;
-  R.takeoffU=R.pos.x; R.takeoffWake=Math.abs(wakeH(R.pos.x,boatZ-STERN_OFF-R.pos.z))>0.12;
+  R.takeoffU=R.pos.x; R.takeoffWake=nearCrest(R.pos.x,boatZ-STERN_OFF-R.pos.z);
   R.takeoffYaw=R.travelYaw+(R.switchStance?Math.PI:0);
   R.baseQuat.copy(R.renderQuat); R.loading=false; R.load=0; R.popped=!!popped; R.spinArmed=R.steerIn===0;
   for(const k in R.L){ R.L[k]=0; R.charge[k]=0; R.chargeT[k]=0; } R.shape=0.3;
@@ -2713,15 +2784,17 @@ function stepRider(dt){
     // For the rider to balance, their centre of mass has to sit on this line, so the pose leans along it.
     _fw.set(nx*aLat-hx*dragA, G+clamp(aReq,-G,3*G), nz*aLat-hz*dragA); R.fw.lerp(_fw,1-Math.exp(-dt/0.06));
     R.landComp=Math.max(0,R.landComp-dt*2.2);
-    // Pop: let go on the way up a wake and the legs extend through the lip, adding 0.5-1.5 m/s for the next
+    // Pop: let go on the way up a wake and the legs extend through the lip, adding 0.5-2.25 m/s for the next
     // ~0.35 s; let go on flat water and it's an ollie. The wake does most of the lifting: when the surface
     // drops away faster than gravity (the lip), the board leaves with the speed it had going up the ramp.
     R.popT=Math.max(0,R.popT-dt);
     if(R.popRequest){ R.popRequest=false;
-      if(vyS>0.8){ R.popArm=0.5+1.0*R.load; R.popT=0.35; R.load=0; }
+      if(vyS>0.8){ R.popArm=0.5+1.75*R.load; R.popT=0.35; R.load=0; }
       else { takeoff(Math.max(vyS,0)+1.6+1.4*R.load,true); R.load=0; } }
     // A committed rider (loading, or popping) stands tall and keeps all of the ramp's lift; a relaxed one soaks it up.
-    if(R.state==='riding' && vyUp>1.5 && aReq<-G){
+    // Unless they're popping, it takes a real lip (3-4.7 m/s up at the top) to throw them: the ripples behind a wake, the
+    // prop-wash boil and the chop together can give 1.5-2.1 m/s, which a rider standing tall still rides over.
+    if(R.state==='riding' && vyUp>(R.popT>0?1.5:2.2) && aReq<-G){
       const pop=R.popT>0?R.popArm:0, vy=vyUp-((R.loading||pop>0)?0:ABSORB)+pop;
       if(vy>0.8){ takeoff(vy,pop>0); R.popT=0; } }
     if(R.state==='riding' && R.overload>0.05) bail('Lost the handle');
@@ -2833,7 +2906,7 @@ function land(h){
   scoreTrick({spin:spinN,flip:flipN,roll:rollN,spinErr,flipErr,rollErr,vn,inside,halfTurns,late});
 }
 function scoreTrick(t){
-  const parts=[]; let pts=50; const w2w=R.takeoffWake && !t.inside && Math.sign(R.pos.x)===-Math.sign(R.takeoffU||1) && Math.abs(R.pos.x)>1.5;
+  const parts=[]; let pts=50; const w2w=R.takeoffWake && wakeToWake(R.takeoffU,R.pos.x,boatZ-STERN_OFF-R.pos.z);
   // a grab counts once the hand is on the board and pays for every second it stays there; the full tweak pays more
   let held=0;
   for(const k of ['Melon','Indy','Nose','Tail']){ if(R.grabTop[k]<GRAB_CATCH)continue;
@@ -3377,14 +3450,17 @@ function tick(dt){
   if(!paused){ gatherInput(); physics(dt); }   // Settings pauses the ride: the world holds still, sound and music play on
   updateBoatVisual(dt); updateRiderVisual(paused?0.0001:dt); if(!paused)updateEffects(dt); updateCamera(dt,false); updateAudio(dt); djUpdate(dt); updateHUD(dt); updateFade(dt);
   // scrolling world
-  const sp=WATER_SP; waterNear.position.set(Math.round(camera.position.x/sp)*sp,0,Math.round((camera.position.z+62)/sp)*sp);
+  // the grid stays on the boat's track (its fine band is the wake) and reaches out the way the camera looks: ahead for
+  // the chase cameras, back down the wake from the tower. Snapped to its own spacing, so vertices never swim.
+  const sp=WATER_SP; camera.getWorldDirection(_wDir);
+  waterNear.position.set(0,0,Math.round((camera.position.z+62*clamp(_wDir.z*4,-1,1))/sp)*sp);
   waterFar.position.set(camera.position.x,-0.02,camera.position.z);
-  waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x,waterNear.position.z,Math.round(140/sp)*sp/2-1,Math.round(230/sp)*sp/2-1);
+  const hw=waterNear.geometry.userData.half; waterFar.material.uniforms.uNearRect.value.set(waterNear.position.x,waterNear.position.z,hw[0]-1,hw[1]-1);
   sky.position.copy(camera.position); hills.position.set(camera.position.x,0,camera.position.z);
   shore.position.z=Math.round(camera.position.z/LAND_P)*LAND_P;
   skyUniforms.uTime.value=simTime;
   treeUniforms.uTime.value=simTime; updateTreeLod();
-  for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uTime.value=simTime; m.uniforms.uBoat.value.set(0,0,boatZ-STERN_OFF); }
+  for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uTime.value=simTime; m.uniforms.uBoat.value.set(0,0,boatZ-STERN_OFF); m.uniforms.uWakePh.value=wakePh(boatZ); }
   renderer.shadowMap.needsUpdate=true;
   renderReflection();
   renderPost();
