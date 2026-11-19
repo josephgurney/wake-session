@@ -521,41 +521,70 @@ const HANDLE_MAX=2.8;        // line pull, in body weights, that rips the handle
 const ABSORB=2.4;            // vertical speed (m/s) relaxed legs soak up going over a wake, like skiing moguls
 
 // ---------- water surface (shared CPU/GPU) ----------
+// The wake, from measured wakes (Goudey & Girod 2015: a ballasted 23 ft wake boat at 22 mph) and how riders describe
+// them. Lateral offset u, distance d behind the transom, s = |u| - crest (positive outside). One side, outside in:
+// flat lake, a dip (near the boat deeper than the crest is tall), a concave ramp kicking to about 30 degrees at a crisp
+// lip, a gentler back face (the wave runs outward, so its back is the long side) with a ripple or two behind it, then
+// the trough: one wide hollow the hull digs between the wakes, with the prop wash boiling down the middle. The crests
+// fan out at about 9 degrees (Rabaud & Moisy: narrower than Kelvin's 19.5 at this boat's Froude number), so a 65 ft
+// line meets them 7.3 m apart. Close to the boat it's steep and narrow; further back lower, wider and rounder, and it
+// fades slowly, so the V runs a long way down the lake. ph is the stern's lake position mod WAKE_PH_PERIOD (reduced on
+// the CPU, so no shader takes sin() of a raw world position): it fixes the boil to the water, not the boat.
+const WAKE_PH_PERIOD=12;
 const WAKE_GLSL = `
-vec2 wake(float u, float d){
+float wakeTrough(float d){ return d <= 0.0 ? 0.0 : 0.46*exp(-pow(d/24.0, 1.3)); }
+vec2 wake(float u, float d, float ph){
   if (d <= 0.0) return vec2(0.0);
-  float xc = 0.9 + d*0.10510;
-  float A = 0.62*(d/18.0)*exp(1.0 - d/18.0);
-  float W = 1.2 + 0.04*d;
-  float s = abs(u) - xc;
-  float h = 0.0;
-  if (s < 0.0) h = exp(-s*s/0.30);
-  else if (s < W) { float r = 1.0 - s/W; h = r*r; }
-  float t = s + 1.2;
-  h -= 0.5*exp(-t*t/0.5);
-  return vec2(A*h, h);
+  float xc = 1.1 + 0.155*d;
+  float A = 0.354*(1.0 - 0.58*exp(-d/4.5))*pow(1.0 + max(d - 14.0, 0.0)/28.6, -0.3);
+  float T = wakeTrough(d);
+  float au = abs(u), s = au - xc, h;
+  if (s >= 0.0) {
+    float D = 0.5 + 0.95*exp(-d/16.0), W = 1.3 + 0.051*d;
+    if (s < W) { float r = 1.0 - s/W; h = A*((1.0 + D)*r*r - D); }
+    else h = -A*D*(1.0 - smoothstep(0.0, W, s - W));
+  } else {
+    float t = -s, Lb = 1.3 + 0.04*d;
+    h = -T + (A + T)*(1.0 - smoothstep(0.0, Lb, t));
+    float lam = 1.5, t0 = Lb - 0.3, t1 = t0 + 0.6, rho = 0.35 + 0.5*(1.0 - exp(-d/60.0));
+    h += A*0.13*exp(-d/120.0)*pow(rho, (t - t1)/lam)*cos(6.2831853*(t - t1)/lam)*smoothstep(t0, t1, t)*smoothstep(0.5, 1.3, au);
+  }
+  float z = ph - d;
+  h += 0.035*smoothstep(0.0, 2.0, d)*(1.0 - smoothstep(15.0, 40.0, d))*(1.0 - smoothstep(0.5, 1.4, au))
+       *sin(1.5707963*z + 2.2*u + 0.4)*cos(1.0471976*z - 1.6*u + 1.1);
+  return vec2(smoothstep(0.0, 0.6, d)*h, exp(-s*s/0.2));
 }
 float ambient(float x, float z, float t){
   return 0.045*sin(x*0.5+z*0.25+t*1.1) + 0.035*sin(x*0.22-z*0.45+t*0.8) + 0.015*sin((x+z)*1.2+t*2.0);
 }`;
-// Cross-section of one wake: outside, a ramp that gets steeper right up to a crisp lip (about 30 degrees at the
-// rider's distance), so the board leaves at the top instead of rolling off a rounded shoulder; inside, a steep face
-// dropping into a trough. Height peaks about 18 m behind the stern, where a 65 ft line puts the rider.
-function wakeH(u,d){
+// The same, line for line, for the physics (tools/probe.js checkWakeGPU() holds them to within a millimetre).
+function wakeTrough(d){ return d<=0?0:0.46*Math.exp(-Math.pow(d/24,1.3)); }
+function wakeH(u,d,ph=0){
   if(d<=0) return 0;
-  const xc=0.9+d*0.10510;
-  const A=0.62*(d/18)*Math.exp(1-d/18);
-  const W=1.2+0.04*d;
-  const s=Math.abs(u)-xc;
-  let h=0;
-  if(s<0) h=Math.exp(-s*s/0.30);
-  else if(s<W){ const r=1-s/W; h=r*r; }
-  const t=s+1.2; h-=0.5*Math.exp(-t*t/0.5);
-  return A*h;
+  const xc=1.1+0.155*d;
+  const A=0.354*(1-0.58*Math.exp(-d/4.5))*Math.pow(1+Math.max(d-14,0)/28.6,-0.3);
+  const T=wakeTrough(d);
+  const au=Math.abs(u), s=au-xc; let h;
+  if(s>=0){
+    const D=0.5+0.95*Math.exp(-d/16), W=1.3+0.051*d;
+    if(s<W){ const r=1-s/W; h=A*((1+D)*r*r-D); }
+    else h=-A*D*(1-smoothstep(0,W,s-W));
+  } else {
+    const t=-s, Lb=1.3+0.04*d;
+    h=-T+(A+T)*(1-smoothstep(0,Lb,t));
+    const lam=1.5, t0=Lb-0.3, t1=t0+0.6, rho=0.35+0.5*(1-Math.exp(-d/60));
+    h+=A*0.13*Math.exp(-d/120)*Math.pow(rho,(t-t1)/lam)*Math.cos(6.2831853*(t-t1)/lam)*smoothstep(t0,t1,t)*smoothstep(0.5,1.3,au);
+  }
+  const z=ph-d;
+  h+=0.035*smoothstep(0,2,d)*(1-smoothstep(15,40,d))*(1-smoothstep(0.5,1.4,au))
+    *Math.sin(1.5707963*z+2.2*u+0.4)*Math.cos(1.0471976*z-1.6*u+1.1);
+  return smoothstep(0,0.6,d)*h;
 }
-const crestX = d => 0.9 + Math.max(0,d)*0.10510;
+const crestX = d => 1.1 + Math.max(0,d)*0.155;
+// the stern's place on the lake, reduced: what wakeH and the shaders' uWakePh take as ph
+const wakePh = boatZ => { const z=(boatZ-STERN_OFF)%WAKE_PH_PERIOD; return z<0?z+WAKE_PH_PERIOD:z; };
 function ambientH(x,z,t){ return 0.045*Math.sin(x*0.5+z*0.25+t*1.1)+0.035*Math.sin(x*0.22-z*0.45+t*0.8)+0.015*Math.sin((x+z)*1.2+t*2.0); }
-function waterAt(x,z,boatZ,t){ return wakeH(x, boatZ-STERN_OFF-z) + ambientH(x,z,t); }
+function waterAt(x,z,boatZ,t){ return wakeH(x, boatZ-STERN_OFF-z, wakePh(boatZ)) + ambientH(x,z,t); }
 function surfaceNormal(x,z,boatZ,t,out){
   const e=0.12;
   const hx=(waterAt(x-e,z,boatZ,t)-waterAt(x+e,z,boatZ,t))/(2*e);
@@ -726,20 +755,20 @@ function renderReflection(){
 }
 
 // ---------- water ----------
-const waterUniforms={uTime:{value:0},uBoat:{value:V3()},uNear:{value:1},uDetail:{value:1},uSun:{value:SUN},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR},uRefl:{value:null},uTexMat:{value:reflTexMat},uReflOn:{value:1},uGlit:{value:0.12},uNearRect:{value:new THREE.Vector4()}};
+const waterUniforms={uTime:{value:0},uBoat:{value:V3()},uWakePh:{value:0},uNear:{value:1},uDetail:{value:1},uSun:{value:SUN},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR},uRefl:{value:null},uTexMat:{value:reflTexMat},uReflOn:{value:1},uGlit:{value:0.12},uNearRect:{value:new THREE.Vector4()}};
 function waterMaterial(near){
   const u=THREE.UniformsUtils.merge([THREE.UniformsLib.lights,waterUniforms]);
   u.uNear.value=near; u.uRefl.value=reflRT.texture; u.uTexMat.value=reflTexMat; u.uSun.value=SUN; u.uFog.value=FOG_COLOR;
   return new THREE.ShaderMaterial({uniforms:u,lights:true,
     vertexShader:`#include <common>
       #include <shadowmap_pars_vertex>
-      uniform float uTime; uniform vec3 uBoat; uniform float uNear; uniform mat4 uTexMat;
+      uniform float uTime; uniform vec3 uBoat; uniform float uWakePh; uniform float uNear; uniform mat4 uTexMat;
       varying vec3 vWorld; varying vec3 vFoam; varying vec3 vN; varying vec4 vRefl; ${WAKE_GLSL}
-      float H(vec2 xz){ return wake(xz.x-uBoat.x, uBoat.z-xz.y).x + ambient(xz.x,xz.y,uTime); }
+      float H(vec2 xz){ return wake(xz.x-uBoat.x, uBoat.z-xz.y, uWakePh).x + ambient(xz.x,xz.y,uTime); }
       void main(){
         vec4 wp=modelMatrix*vec4(position,1.0);
         float u=wp.x-uBoat.x; float d=uBoat.z-wp.z;
-        vec2 w=wake(u,d);
+        vec2 w=wake(u,d,uWakePh);
         float h0=w.x+ambient(wp.x,wp.z,uTime);
         wp.y=uNear*h0;
         float e=0.25;
@@ -750,7 +779,7 @@ function waterMaterial(near){
         // undefined, and 0*NaN is still NaN, which then interpolates across whole triangles as white patches.
         vFoam=vec3(0.0);
         if(uNear>0.5 && d>0.0 && d<300.0){
-          float xc=0.9+d*0.10510; float s=abs(u)-xc;
+          float xc=1.1+d*0.155; float s=abs(u)-xc;
           float lip=smoothstep(0.74,0.98,w.y)*smoothstep(0.0,2.5,d)*exp(-d/14.0);
           float spill=(1.0-smoothstep(0.0,1.4,abs(s+0.7)))*smoothstep(1.0,5.0,d)*exp(-d/20.0)*0.42;
           float hw=1.1+0.045*d; float wash=(1.0-smoothstep(hw*0.35,hw,abs(u)))*exp(-d/13.0);
@@ -2521,9 +2550,9 @@ class Spray{
     const attr=(name,size)=>{ const a=new THREE.InstancedBufferAttribute(new Float32Array(n*size),size); a.setUsage(THREE.DynamicDrawUsage); g.setAttribute(name,a); return a; };
     this.aP0=attr('aP0',3); this.aV0=attr('aV0',3); this.aT=attr('aT',4); g.instanceCount=n; this.geo=g;
     const m=new THREE.ShaderMaterial({transparent:true,depthWrite:false,
-      uniforms:{uClock:{value:0},uWaterT:{value:0},uBoat:{value:V3()},uSun:{value:SUN},uViewH:{value:innerHeight},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR}},
+      uniforms:{uClock:{value:0},uWaterT:{value:0},uBoat:{value:V3()},uWakePh:{value:0},uSun:{value:SUN},uViewH:{value:innerHeight},uFog:{value:FOG_COLOR},uFogNear:{value:FOG_NEAR},uFogFar:{value:FOG_FAR}},
       vertexShader:`attribute vec3 aP0; attribute vec3 aV0; attribute vec4 aT;
-        uniform float uClock; uniform float uWaterT; uniform vec3 uBoat; uniform vec3 uSun; uniform float uViewH; uniform float uFogNear; uniform float uFogFar;
+        uniform float uClock; uniform float uWaterT; uniform vec3 uBoat; uniform float uWakePh; uniform vec3 uSun; uniform float uViewH; uniform float uFogNear; uniform float uFogFar;
         varying vec2 vUv; varying float vA; varying float vKind; varying float vSeed; varying vec3 vLight; varying float vFog;
         ${WAKE_GLSL}
         void main(){
@@ -2534,7 +2563,7 @@ class Spray{
           vec3 vel=vec3(aV0.x*e,aV0.y-g*tau,aV0.z*e);
           if(kind<1.5) p.y=aP0.y+aV0.y*tau-0.5*g*tau*tau;
           else { p.y=aP0.y+aV0.y*(1.0-e)/k+0.18*tau; vel.y=aV0.y*e+0.18; }
-          float h=wake(p.x-uBoat.x,uBoat.z-p.z).x+ambient(p.x,p.z,uWaterT);
+          float h=wake(p.x-uBoat.x,uBoat.z-p.z,uWakePh).x+ambient(p.x,p.z,uWaterT);
           if(kind<1.5 && tau>0.05 && p.y<h-0.02){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }   // back in the lake
           float grow=kind<0.5?1.0:(kind<1.5?1.0+0.8*age:1.0+1.5*age);
           float w=0.5*size*grow;
@@ -2586,7 +2615,7 @@ class Spray{
   emitRate(acc,key,rate,dt,fn){ acc[key]=(acc[key]||0)+rate*dt*this.rate; while(acc[key]>=1){ acc[key]-=1; fn(); } }
   update(dt){
     this.clock+=dt;
-    const u=this.mat.uniforms; u.uClock.value=this.clock; u.uWaterT.value=simTime; u.uBoat.value.set(0,0,boatZ-STERN_OFF);
+    const u=this.mat.uniforms; u.uClock.value=this.clock; u.uWaterT.value=simTime; u.uBoat.value.set(0,0,boatZ-STERN_OFF); u.uWakePh.value=wakePh(boatZ);
     if(this.dn>0){
       for(const a of [this.aP0,this.aV0,this.aT]){
         const s=a.itemSize; a.clearUpdateRanges();
@@ -3384,7 +3413,7 @@ function tick(dt){
   shore.position.z=Math.round(camera.position.z/LAND_P)*LAND_P;
   skyUniforms.uTime.value=simTime;
   treeUniforms.uTime.value=simTime; updateTreeLod();
-  for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uTime.value=simTime; m.uniforms.uBoat.value.set(0,0,boatZ-STERN_OFF); }
+  for(const m of [waterNear.material,waterFar.material]){ m.uniforms.uTime.value=simTime; m.uniforms.uBoat.value.set(0,0,boatZ-STERN_OFF); m.uniforms.uWakePh.value=wakePh(boatZ); }
   renderer.shadowMap.needsUpdate=true;
   renderReflection();
   renderPost();

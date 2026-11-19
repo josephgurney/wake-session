@@ -249,3 +249,85 @@ export async function gpu(n = 30) {
   }
   return { refl: +(sum[0] / n).toFixed(2), main: +(sum[1] / n).toFixed(2), total: +((sum[0] + sum[1]) / n).toFixed(2) };
 }
+
+// Checks for the real wake shape (docs/superpowers/plans/2026-11-19-real-wake-shape.md): each returns the list of what's
+// wrong, empty when it all holds. Figures are the spec's, at the rider's distance unless said.
+/* global wakeH, crestX, wakeTrough, WAKE_GLSL, THREE */
+const near = (v, want, tol) => Math.abs(v - want) <= tol;
+const fmt = v => (+v).toFixed(3);
+// the shape of one side of the wake at distance d: crest, the dip outside it, the ramp and back face, the middle
+export function wakeProfile(d, ph = 0) {
+  const xc = crestX(d), h = u => wakeH(u, d, ph), du = 0.01;
+  let dip = { h: 9, s: 0 };
+  for (let s = 0.2; s <= 5; s += du) { const v = h(xc + s); if (v < dip.h) dip = { h: v, s }; }
+  const slope = (a, b) => Math.atan(Math.abs(h(a) - h(b)) / Math.abs(b - a)) / (Math.PI / 180);
+  let back = 0, inMin = 9, ripples = 0;
+  for (let s = -0.05; s >= -2.6; s -= du) back = Math.max(back, slope(xc + s, xc + s - du));
+  for (let u = 0; u < xc - 0.05; u += du) inMin = Math.min(inMin, h(u));
+  for (let s = -0.5; s >= -2.8 && xc + s > 0.3; s -= du) { const a = h(xc + s + du), b = h(xc + s), c = h(xc + s - du); if (b > a && b > c) ripples++; }
+  let mid = [9, -9]; for (let u = -0.8; u <= 0.8; u += du) { const v = h(u); mid = [Math.min(mid[0], v), Math.max(mid[1], v)]; }
+  return { xc, crest: h(xc), dip: dip.h, dipS: dip.s, lip: slope(xc + 0.02, xc + 0.08), back, ripples, inMin, mid, trough: -wakeTrough(d) };
+}
+export function checkWake() {
+  const bad = [], miss = (what, got, want) => bad.push(`${what}: ${got} (want ${want})`);
+  if (typeof wakeTrough !== 'function') return ['wakeTrough(d) missing'];
+  const p = wakeProfile(16.5);
+  if (!near(p.xc, 3.65, 0.15)) miss('crest half-width at 16.5 m', fmt(p.xc), '3.65 ±0.15');
+  if (!near(p.crest, 0.34, 0.03)) miss('crest height', fmt(p.crest), '0.34 ±0.03');
+  if (!near(p.dip, -0.29, 0.04)) miss('dip depth', fmt(p.dip), '-0.29 ±0.04');
+  if (!(p.dipS > 1.4 && p.dipS < 2.8)) miss('dip distance outside the crest', fmt(p.dipS), '1.4-2.8 m');
+  if (!(p.lip >= 28 && p.lip <= 33)) miss('lip slope deg', fmt(p.lip), '28-33');
+  if (!(p.back <= 25 && p.back >= 15)) miss('back face max slope deg', fmt(p.back), '15-25');
+  if (p.ripples < 1 || p.ripples > 2) miss('ripples inside the crest', p.ripples, '1-2');
+  if (!near(p.trough, -0.24, 0.03)) miss('middle trough level', fmt(p.trough), '-0.24 ±0.03');
+  if (!(p.mid[0] >= p.trough - 0.045 && p.mid[1] <= p.trough + 0.045)) miss('middle within ±4 cm of the trough', p.mid.map(fmt).join('..'), `${fmt(p.trough)} ±0.04`);
+  if (!(p.crest - p.inMin >= 0.55 && p.crest - p.inMin <= 0.66)) miss('trough to crest', fmt(p.crest - p.inMin), '0.55-0.65');
+  // along the course
+  const c = d => wakeH(crestX(d), d, 0), c0 = c(16.5);
+  if (!near(c(0.5), 0.15, 0.05)) miss('crest at the transom', fmt(c(0.5)), '0.15 ±0.05');
+  for (const d of [10, 13, 20]) if (c(d) < 0.9 * c0) miss(`crest at ${d} m vs 16.5 m`, fmt(c(d) / c0), '>= 0.9');
+  if (!near(c(60) / c0, 0.75, 0.08)) miss('crest at 60 m vs 16.5 m', fmt(c(60) / c0), '0.75 ±0.08');
+  if (!near(c(200) / c0, 0.55, 0.08)) miss('crest at 200 m vs 16.5 m', fmt(c(200) / c0), '0.55 ±0.08');
+  if (!near(-wakeTrough(1.5), -0.45, 0.05)) miss('trough behind the transom', fmt(-wakeTrough(1.5)), '-0.45 ±0.05');
+  if (!near(-wakeTrough(40), -0.1, 0.04)) miss('trough at 40 m', fmt(-wakeTrough(40)), '-0.10 ±0.04');
+  if (Math.abs(wakeTrough(70)) > 0.03) miss('trough at 70 m', fmt(-wakeTrough(70)), '0 ±0.03');
+  // smooth and finite everywhere: nothing ahead of the transom, no steps (2 cm apart) except right at a crest
+  for (let d = -5; d <= 300; d += d < 30 ? 0.5 : 5) {
+    const xc = crestX(Math.max(d, 0));
+    for (let u = -12; u <= 12; u += 0.02) {
+      const v = wakeH(u, d, 0.37), w = wakeH(u + 0.02, d, 0.37);
+      if (!Number.isFinite(v)) { bad.push(`not finite at u=${fmt(u)} d=${d}`); return bad; }
+      if (d <= 0 && Math.abs(v) > 0.01) { bad.push(`height ahead of the transom at u=${fmt(u)} d=${d}: ${fmt(v)}`); return bad; }
+      if (Math.abs(w - v) > 0.03 && Math.abs(Math.abs(u + 0.01) - xc) > 0.05) { bad.push(`step of ${fmt(w - v)} at u=${fmt(u)} d=${d}`); return bad; }
+    }
+  }
+  for (let u = -8; u <= 8; u += 0.25) for (let d = 0; d < 120; d += 0.02)
+    if (Math.abs(wakeH(u, d + 0.02, 0.37) - wakeH(u, d, 0.37)) > 0.03) { bad.push(`step along the course at u=${u} d=${fmt(d)}`); return bad; }
+  return bad;
+}
+// The shaders' wake() against the physics' wakeH(): render wake(u, d, ph).x on a grid into a float target and compare.
+// Returns the samples more than 1 mm apart (and shader errors), empty when they agree.
+/* global renderer */
+export function checkWakeGPU(ph = 0.37) {
+  const NU = 121, ND = 98, uAt = i => -12 + i * 0.2, dAt = j => (j < 70 ? -5 + j * 0.5 : 30 + (j - 70) * 10);
+  const rt = new THREE.WebGLRenderTarget(NU, ND, { type: THREE.FloatType, format: THREE.RGBAFormat, depthBuffer: false });
+  const mat = new THREE.ShaderMaterial({ uniforms: { uPh: { value: ph } },
+    vertexShader: 'void main(){ gl_Position=vec4(position.xy,0.0,1.0); }',
+    fragmentShader: `uniform float uPh; ${WAKE_GLSL}
+      void main(){ float i=floor(gl_FragCoord.x), j=floor(gl_FragCoord.y);
+        float u=-12.0+i*0.2, d=j<70.0?-5.0+j*0.5:30.0+(j-70.0)*10.0;
+        gl_FragColor=vec4(wake(u,d,uPh).x,0.0,0.0,1.0); }` });
+  const sc = new THREE.Scene(), q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat); q.frustumCulled = false; sc.add(q);
+  const prev = renderer.getRenderTarget(), errs = [], log = console.error; console.error = (...a) => { errs.push(a.join(' ').slice(0, 300)); };
+  renderer.setRenderTarget(rt); renderer.render(sc, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)); renderer.setRenderTarget(prev);
+  console.error = log;
+  const px = new Float32Array(NU * ND * 4); renderer.readRenderTargetPixels(rt, 0, 0, NU, ND, px);
+  rt.dispose(); mat.dispose(); q.geometry.dispose();
+  if (errs.length) return errs;
+  const bad = [];
+  for (let j = 0; j < ND; j++) for (let i = 0; i < NU; i++) {
+    const g = px[(j * NU + i) * 4], c = wakeH(uAt(i), dAt(j), ph);
+    if (!(Math.abs(g - c) <= 0.001)) bad.push(`u=${uAt(i).toFixed(1)} d=${dAt(j)}: gpu ${fmt(g)} cpu ${fmt(c)}`);
+  }
+  return bad.length > 12 ? [...bad.slice(0, 12), `...and ${bad.length - 12} more`] : bad;
+}
